@@ -1,0 +1,19 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Memory/Brain icon -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M54,30c-8,0 -12,4 -12,10c0,4 2,7 5,9c-2,1 -5,4 -5,8c0,6 4,10 12,10c8,0 12,-4 12,-10c0,-4 -2,-7 -5,-8c3,-2 5,-5 5,-9C66,34 62,30 54,30z" />
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M54,36c4,0 6,2 6,5c0,3 -2,5 -6,5c-4,0 -6,-2 -6,-5C48,38 50,36 54,36z" />
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M48,48h12M48,54h12M48,60h12"
+        android:strokeWidth="2"
+        android:strokeColor="#FFFFFF"
+        android:strokeLineCap="round" />
+</vector>

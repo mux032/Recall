@@ -1,0 +1,29 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="200dp"
+    android:height="200dp"
+    android:viewportWidth="200"
+    android:viewportHeight="200">
+    <!-- Privacy/Lock illustration -->
+    <path
+        android:fillColor="#10B981"
+        android:fillAlpha="0.2"
+        android:pathData="M60,80h80v70h-80z" />
+    <path
+        android:fillColor="#10B981"
+        android:fillAlpha="0.4"
+        android:pathData="M60,80h80v70h-80z" />
+    <path
+        android:fillColor="#10B981"
+        android:strokeColor="#10B981"
+        android:strokeWidth="2"
+        android:pathData="M70,80v15c0,-15 0,-15 30,-15c30,0 30,0 30,15v-15v70h-60v-70z" />
+    <path
+        android:fillColor="#10B981"
+        android:pathData="M100,115m-15,0a15,15 0,1 1,30 0a15,15 0,1 1,-30 0" />
+    <path
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="2"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:pathData="M97,112l3,3l3,-3M100,115v3" />
+</vector>
