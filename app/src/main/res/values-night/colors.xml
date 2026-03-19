@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Primary Colors — Dark Theme overrides -->
+    <color name="primary">#60A5FA</color>
+    <color name="primary_variant">#93C5FD</color>
+    <color name="primary_light">#BFDBFE</color>
+
+    <!-- Secondary Colors -->
+    <color name="secondary">#34D399</color>
+    <color name="secondary_variant">#6EE7B7</color>
+
+    <!-- Background Colors -->
+    <color name="background_light">#0F172A</color>
+    <color name="surface_light">#1E293B</color>
+    <color name="surface_variant_light">#334155</color>
+    <color name="on_background_light">#F8FAFC</color>
+    <color name="on_surface_light">#E2E8F0</color>
+
+    <!-- Utility -->
+    <color name="divider_light">#475569</color>
+    <color name="placeholder_light">#64748B</color>
+
+    <!-- Category Colors (unchanged — vibrant works on dark too) -->
+    <color name="category_shopping">#A78BFA</color>
+    <color name="category_travel">#22D3EE</color>
+    <color name="category_code">#FB923C</color>
+    <color name="category_food">#A3E635</color>
+    <color name="category_finance">#2DD4BF</color>
+    <color name="category_social">#F472B6</color>
+    <color name="category_work">#818CF8</color>
+    <color name="category_recipes">#FB7185</color>
+
+    <!-- Splash stays dark blue — no change needed -->
+    <color name="splash_background">#1D4ED8</color>
+</resources>

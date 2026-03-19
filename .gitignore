@@ -86,9 +86,9 @@ fastlane/readme.md
 
 # Project specific - Documentation (optional)
 # Uncomment if you don't want to track documentation in git
+.agent/
 docs/
-status.md
-TODO.md
+planning/
 
 # Test output
 test-*.log
@@ -96,3 +96,12 @@ test-output.log
 test-results.log
 test-final-results.log
 test-results-final.log
+
+# AI Model files (large binaries - download separately)
+app/src/main/assets/models/*.onnx
+app/src/main/assets/models/*.bin
+*.onnx
+*.pt
+*.pth
+
+

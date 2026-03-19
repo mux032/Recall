@@ -9,9 +9,18 @@
         android:maxSdkVersion="32"
         tools:ignore="ScopedStorage" />
     <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    
+    <!-- Phase 2: Screenshot access permissions -->
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />
+    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <!-- For accessing screenshot folder -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    
+    <!-- Required to download model files like e5-small from huggingface -->
+    <uses-permission android:name="android.permission.INTERNET" />
 
     <application
         android:name=".RecallApplication"
@@ -24,30 +33,17 @@
         android:supportsRtl="true"
         android:theme="@style/Theme.Recall"
         tools:targetApi="31">
+        
+        <!-- Auto-download ML Kit OCR Model on app install -->
+        <meta-data
+            android:name="com.google.mlkit.vision.DEPENDENCIES"
+            android:value="ocr" />
 
         <!-- Main Activity -->
         <activity
-            android:name=".presentation.MainActivity"
-            android:exported="false"
-            android:theme="@style/Theme.Recall" />
-
-        <!-- Onboarding Activity -->
-        <activity
-            android:name=".presentation.onboarding.OnboardingActivity"
-            android:exported="false"
-            android:theme="@style/Theme.Recall" />
-
-        <!-- Permission Activity -->
-        <activity
-            android:name=".presentation.permission.PermissionActivity"
-            android:exported="false"
-            android:theme="@style/Theme.Recall" />
-
-        <!-- Splash Screen Activity -->
-        <activity
-            android:name=".presentation.splash.SplashActivity"
+            android:name=".MainActivity"
             android:exported="true"
-            android:theme="@style/Theme.Recall.Splash">
+            android:theme="@style/Theme.Recall">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
@@ -62,7 +58,8 @@
             tools:node="merge">
             <meta-data
                 android:name="androidx.work.WorkManagerInitializer"
-                android:value="androidx.startup" />
+                android:value="androidx.startup"
+                tools:node="remove" />
         </provider>
 
     </application>

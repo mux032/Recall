@@ -107,4 +107,16 @@
     <string name="error_no_network">No internet connection. Please connect and try again.</string>
     <string name="error_storage_full">Storage is full. Please free up space.</string>
     <string name="error_model_download_failed">Failed to download models. Please try again.</string>
+    <string name="error_ocr_failed">Failed to extract text from image. Please try again.</string>
+    <string name="error_vision_failed">Failed to analyze image. Please try again.</string>
+    <string name="error_database_failed">Database error. Please restart the app.</string>
+    <string name="error_permission_denied">Permission denied. Please grant storage access in Settings.</string>
+    <string name="error_processing_timeout">Processing timed out. Please try again.</string>
+    <string name="error_model_not_found">AI model not found. Please download from Settings.</string>
+    
+    <!-- Status Messages -->
+    <string name="status_processing">Processing screenshot…</string>
+    <string name="status_indexing">Indexing for search…</string>
+    <string name="status_complete">Processing complete!</string>
+    <string name="status_downloading">Downloading model…</string>
 </resources>
