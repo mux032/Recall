@@ -67,6 +67,10 @@ class MainActivity : ComponentActivity() {
                             }
                         )
                     } else {
+                        // Permission already granted - trigger scan if needed
+                        LaunchedEffect(Unit) {
+                            startInitialDeepScan()
+                        }
                         RecallNavGraph()
                     }
                 }

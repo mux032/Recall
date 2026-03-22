@@ -10,10 +10,12 @@ import androidx.navigation.navArgument
 import com.recall.app.presentation.ui.detail.DetailScreen
 import com.recall.app.presentation.ui.home.HomeScreen
 import com.recall.app.presentation.ui.search.SearchScreen
+import com.recall.app.presentation.ui.settings.SettingsScreen
 
 sealed class Screen(val route: String) {
     object Home : Screen("home")
     object Search : Screen("search")
+    object Settings : Screen("settings")
     object Detail : Screen("detail/{screenshotId}") {
         fun createRoute(screenshotId: String) = "detail/$screenshotId"
     }
@@ -30,6 +32,7 @@ fun RecallNavGraph(
         composable(Screen.Home.route) {
             HomeScreen(
                 onSearchClick = { navController.navigate(Screen.Search.route) },
+                onSettingsClick = { navController.navigate(Screen.Settings.route) },
                 onScreenshotClick = { screenshotId ->
                     navController.navigate(Screen.Detail.createRoute(screenshotId))
                 }
@@ -42,6 +45,12 @@ fun RecallNavGraph(
                 onScreenshotClick = { screenshotId ->
                     navController.navigate(Screen.Detail.createRoute(screenshotId))
                 }
+            )
+        }
+
+        composable(Screen.Settings.route) {
+            SettingsScreen(
+                onNavigateBack = { navController.popBackStack() }
             )
         }
 

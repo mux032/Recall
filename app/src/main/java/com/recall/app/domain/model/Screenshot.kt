@@ -11,5 +11,8 @@ data class Screenshot(
     val ocrText: String? = null,
     val category: String = "Uncategorized",
     val tags: List<String> = emptyList(),
-    val embedding: FloatArray? = null
+    val embedding: FloatArray? = null,
+    val appName: String = "",
+    val description: String = "",
+    val timestamp: Long = dateCreated
 )

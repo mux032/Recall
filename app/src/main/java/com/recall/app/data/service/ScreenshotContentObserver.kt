@@ -11,7 +11,6 @@ import androidx.work.Data
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkManager
 import com.recall.app.data.worker.ScreenshotProcessingWorker
-import java.util.UUID
 
 class ScreenshotContentObserver(
     private val context: Context,

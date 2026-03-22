@@ -18,17 +18,28 @@ class VectorIndexBootstrapper @Inject constructor(
         applicationScope.launch(Dispatchers.IO) {
             try {
                 Log.d(TAG, "Bootstrapping Vector Index into memory...")
-                // For MVP, we load all at once. For thousands of images we'd paginate
                 val screenshots = screenshotDao.getAllScreenshots().firstOrNull() ?: emptyList()
-                
+                Log.i(TAG, "Total screenshots in DB: ${screenshots.size}")
+
+                var withEmbeddings = 0
+                var withoutEmbeddings = 0
+
                 val vectorData = screenshots.mapNotNull { entity ->
-                    entity.embeddingByteArray?.let { blob ->
-                        entity.id to blob
+                    if (entity.embeddingByteArray != null) {
+                        withEmbeddings++
+                        entity.id to entity.embeddingByteArray
+                    } else {
+                        withoutEmbeddings++
+                        null
                     }
                 }.toMap()
 
+                Log.i(TAG, "Screenshots with embeddings: $withEmbeddings")
+                Log.i(TAG, "Screenshots without embeddings: $withoutEmbeddings")
+
                 vectorIndex.loadAll(vectorData)
-                Log.d(TAG, "Vector Index successfully loaded with ${vectorData.size} embeddings")
+                Log.i(TAG, "Vector Index loaded with ${vectorData.size} embeddings")
+                Log.i(TAG, "VectorIndex.isReady() = ${vectorIndex.isReady()}")
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to bootstrap Vector Index", e)
             }
