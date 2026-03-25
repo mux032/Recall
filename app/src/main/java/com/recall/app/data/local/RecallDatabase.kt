@@ -6,9 +6,13 @@ import com.recall.app.data.local.dao.ScreenshotDao
 import com.recall.app.data.local.entity.FtsScreenshotEntity
 import com.recall.app.data.local.entity.ScreenshotEntity
 
+/**
+ * DEVELOPMENT PHASE: Database version reset to 1 for fresh start.
+ * Using fallbackToDestructiveMigration() - no manual migrations needed.
+ */
 @Database(
     entities = [ScreenshotEntity::class, FtsScreenshotEntity::class],
-    version = 2,
+    version = 1,
     exportSchema = false
 )
 abstract class RecallDatabase : RoomDatabase() {

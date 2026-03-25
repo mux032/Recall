@@ -85,8 +85,10 @@ fastlane/readme.md
 *.swp
 
 # Project specific - Documentation (optional)
-# Uncomment if you don't want to track documentation in git
+
+# AI coding tools
 .agent/
+.qwen/
 docs/
 planning/
 

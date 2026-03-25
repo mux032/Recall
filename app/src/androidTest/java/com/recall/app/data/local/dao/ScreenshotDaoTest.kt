@@ -4,7 +4,7 @@ import android.content.Context
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
-import com.recall.app.data.local.database.RecallDatabase
+import com.recall.app.data.local.RecallDatabase
 import com.recall.app.data.local.entity.ScreenshotEntity
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
@@ -55,7 +55,7 @@ class ScreenshotDaoTest {
         )
         screenshotDao.insert(screenshot)
 
-        val retrieved = screenshotDao.getById("test-uuid-1")
+        val retrieved = screenshotDao.getScreenshotById("test-uuid-1")
         assertEquals(screenshot.fileName, retrieved?.fileName)
         
         // Test Flow retrieval
@@ -83,7 +83,7 @@ class ScreenshotDaoTest {
         screenshotDao.insert(screenshot)
         screenshotDao.deleteById("test-uuid-2")
         
-        val retrieved = screenshotDao.getById("test-uuid-2")
+        val retrieved = screenshotDao.getScreenshotById("test-uuid-2")
         assertNull(retrieved)
     }
 }

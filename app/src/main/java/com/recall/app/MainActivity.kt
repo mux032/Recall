@@ -79,7 +79,9 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun startInitialDeepScan() {
-        val workRequest = OneTimeWorkRequestBuilder<ScanExistingWorker>().build()
-        WorkManager.getInstance(this).enqueue(workRequest)
+        val scanRequest = OneTimeWorkRequestBuilder<ScanExistingWorker>().build()
+        val ocrRequest = OneTimeWorkRequestBuilder<com.recall.app.data.worker.BackgroundOcrWorker>().build()
+        
+        WorkManager.getInstance(this).beginWith(scanRequest).then(ocrRequest).enqueue()
     }
 }

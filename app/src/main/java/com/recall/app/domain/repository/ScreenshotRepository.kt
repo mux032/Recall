@@ -12,4 +12,5 @@ interface ScreenshotRepository {
     suspend fun addScreenshot(screenshot: Screenshot)
     suspend fun updateScreenshot(screenshot: Screenshot)
     suspend fun deleteScreenshot(id: String)
+    suspend fun processOcr(id: String): Screenshot?
 }

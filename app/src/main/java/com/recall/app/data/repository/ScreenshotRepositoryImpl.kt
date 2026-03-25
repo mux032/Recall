@@ -11,6 +11,8 @@ import com.recall.app.data.local.entity.ScreenshotEntity
 import com.recall.app.data.local.entity.toDomainModel
 import com.recall.app.domain.model.Screenshot
 import com.recall.app.domain.repository.ScreenshotRepository
+import com.recall.app.domain.usecase.EmbeddingGenerator
+import com.recall.app.domain.usecase.OcrProcessor
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
@@ -21,6 +23,8 @@ import javax.inject.Singleton
 @Singleton
 class ScreenshotRepositoryImpl @Inject constructor(
     private val screenshotDao: ScreenshotDao,
+    private val ocrProcessor: OcrProcessor,
+    private val embeddingGenerator: EmbeddingGenerator,
     @ApplicationContext private val context: Context
 ) : ScreenshotRepository {
 
@@ -81,6 +85,33 @@ class ScreenshotRepositoryImpl @Inject constructor(
 
     override suspend fun deleteScreenshot(id: String) {
         screenshotDao.deleteById(id)
+    }
+
+    override suspend fun processOcr(id: String): Screenshot? {
+        val entity = screenshotDao.getScreenshotById(id) ?: return null
+        
+        // Skip if file doesn't exist
+        val file = java.io.File(entity.filePath)
+        if (!file.exists()) return null
+
+        // Run OCR
+        val extractedText = ocrProcessor.process(entity.filePath)
+        
+        // Generate embedding
+        val embedding = extractedText?.let { text ->
+            embeddingGenerator.generate(text)
+        }
+
+        // Update database
+        val updatedEntity = entity.copy(
+            ocrText = extractedText,
+            embeddingByteArray = embedding?.let { floatArrayToByteArray(it) },
+            processingState = "DONE",
+            dateIndexed = System.currentTimeMillis()
+        )
+
+        screenshotDao.update(updatedEntity)
+        return updatedEntity.toDomainModel()
     }
 
     suspend fun scanExistingScreenshots(): Int {

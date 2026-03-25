@@ -32,4 +32,30 @@ class DetailViewModel @Inject constructor(
             _screenshot.value = screenshotRepository.getScreenshotById(screenshotId)
         }
     }
+
+    /**
+     * Saves the edited OCR text for the current screenshot.
+     * This updates the database so changes persist across app sessions.
+     */
+    fun saveEditedOcrText(editedText: String) {
+        viewModelScope.launch {
+            val currentScreenshot = _screenshot.value ?: return@launch
+            val updatedScreenshot = currentScreenshot.copy(ocrText = editedText)
+            screenshotRepository.updateScreenshot(updatedScreenshot)
+            _screenshot.value = updatedScreenshot
+        }
+    }
+
+    /**
+     * Manually triggers OCR for the current screenshot.
+     * Used when the user clicks the "Generate" icon in the detail screen.
+     */
+    fun prioritizeOcr() {
+        viewModelScope.launch {
+            val updatedScreenshot = screenshotRepository.processOcr(screenshotId)
+            if (updatedScreenshot != null) {
+                _screenshot.value = updatedScreenshot
+            }
+        }
+    }
 }

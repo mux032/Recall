@@ -1,16 +1,34 @@
 package com.recall.app.presentation.ui.detail
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
-import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.focusable
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
+import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material.icons.automirrored.filled.Article
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -20,35 +38,41 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
+import androidx.hilt.navigation.compose.hiltViewModel
 import com.recall.app.domain.model.Screenshot
 import java.text.SimpleDateFormat
 import java.util.*
 
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.foundation.gestures.detectTapGestures
+// ... rest of imports unchanged
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun DetailScreen(
-    onBackClick: () -> Unit,
-    onSettingsClick: () -> Unit = {},
-    screenshot: Screenshot? = null
+    viewModel: DetailViewModel = hiltViewModel()
 ) {
-    val sampleScreenshot = screenshot ?: getSampleScreenshot()
+    val screenshot by viewModel.screenshot.collectAsState()
     var chatQuery by remember { mutableStateOf("") }
+    var isEditingText by remember { mutableStateOf(false) }
 
     Scaffold(
-        topBar = {
-            DetailTopBar(
-                onBackClick = onBackClick,
-                onSettingsClick = onSettingsClick
-            )
-        },
-        containerColor = MaterialTheme.colorScheme.surface
+        containerColor = MaterialTheme.colorScheme.surface,
+        modifier = Modifier.pointerInput(Unit) {
+            detectTapGestures(onTap = {
+                // This will be handled inside ExtractedTextSection if needed, 
+                // but we can also handle it here for global clicks.
+            })
+        }
     ) { paddingValues ->
         LazyColumn(
             modifier = Modifier
@@ -59,10 +83,9 @@ fun DetailScreen(
         ) {
             // Hero Screenshot Section
             item {
-                HeroScreenshotSection(
-                    screenshot = sampleScreenshot,
-                    onSourceLinkClick = { }
-                )
+                screenshot?.let {
+                    HeroScreenshotSection(screenshot = it)
+                }
             }
 
             // AI Summary Card
@@ -70,118 +93,48 @@ fun DetailScreen(
                 AISummaryCard()
             }
 
-            // Metadata Section
-            item {
-                MetadataSection(screenshot = sampleScreenshot)
-            }
-
             // Extracted Text Section
             item {
-                ExtractedTextSection(ocrText = sampleScreenshot.ocrText)
+                screenshot?.let { scr ->
+                    ExtractedTextSection(
+                        ocrText = scr.ocrText,
+                        isEditing = isEditingText,
+                        onEditModeChange = { isEditingText = it },
+                        onTextChanged = { editedText ->
+                            viewModel.saveEditedOcrText(editedText)
+                        },
+                        onGenerateClick = {
+                            viewModel.prioritizeOcr()
+                        }
+                    )
+                }
             }
 
             // Suggested Actions
             item {
                 SuggestedActions()
-                Spacer(modifier = Modifier.height(100.dp)) // Space for chat bar and nav
             }
         }
-
-        // AI Chat Bar and Bottom Navigation
-        AIChatBarAndNavigation(
-            query = chatQuery,
-            onQueryChange = { chatQuery = it },
-            onSendClick = { },
-            onGalleryClick = onBackClick,
-            onIntelligenceClick = { },
-            onSettingsClick = onSettingsClick
-        )
     }
-}
 
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun DetailTopBar(
-    onBackClick: () -> Unit,
-    onSettingsClick: () -> Unit
-) {
-    TopAppBar(
-        title = {
-            Text(
-                text = "Curator",
-                style = MaterialTheme.typography.titleLarge,
-                fontWeight = FontWeight.ExtraBold,
-                color = MaterialTheme.colorScheme.primary
-            )
-        },
-        navigationIcon = {
-            IconButton(
-                onClick = onBackClick,
-                modifier = Modifier
-                    .size(40.dp)
-                    .clip(RoundedCornerShape(20.dp))
-            ) {
-                Icon(
-                    imageVector = Icons.Default.ArrowBack,
-                    contentDescription = "Navigate back",
-                    tint = MaterialTheme.colorScheme.onSurface,
-                    modifier = Modifier.size(24.dp)
-                )
-            }
-        },
-        actions = {
-            IconButton(
-                onClick = onSettingsClick,
-                modifier = Modifier
-                    .size(40.dp)
-                    .clip(RoundedCornerShape(20.dp))
-            ) {
-                Icon(
-                    imageVector = Icons.Default.Settings,
-                    contentDescription = "Settings",
-                    tint = MaterialTheme.colorScheme.onSurface,
-                    modifier = Modifier.size(24.dp)
-                )
-            }
-            Spacer(modifier = Modifier.width(4.dp))
-            // User Avatar
-            Surface(
-                modifier = Modifier
-                    .size(40.dp)
-                    .clip(RoundedCornerShape(20.dp)),
-                color = MaterialTheme.colorScheme.primaryContainer,
-                border = androidx.compose.foundation.BorderStroke(
-                    2.dp,
-                    MaterialTheme.colorScheme.surface
-                )
-            ) {
-                Box(contentAlignment = Alignment.Center) {
-                    Icon(
-                        imageVector = Icons.Default.Person,
-                        contentDescription = "User avatar",
-                        tint = MaterialTheme.colorScheme.onPrimaryContainer,
-                        modifier = Modifier.size(24.dp)
-                    )
-                }
-            }
-        },
-        colors = TopAppBarDefaults.topAppBarColors(
-            containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.8f),
-            titleContentColor = MaterialTheme.colorScheme.primary
-        )
+    // Chat Bar floating at bottom
+    ChatBarAtBottom(
+        query = chatQuery,
+        onQueryChange = { chatQuery = it },
+        onSendClick = { }
     )
 }
 
 @Composable
 private fun HeroScreenshotSection(
-    screenshot: Screenshot,
-    onSourceLinkClick: () -> Unit
+    screenshot: Screenshot
 ) {
     val context = LocalContext.current
 
-    Box(
+    Column(
         modifier = Modifier.fillMaxWidth()
     ) {
+        // Screenshot Image Card
         Surface(
             modifier = Modifier.fillMaxWidth(),
             shape = RoundedCornerShape(16.dp),
@@ -219,113 +172,34 @@ private fun HeroScreenshotSection(
                             )
                         )
                 )
-
-                // Text Selection Highlight Overlay (simulated)
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(16.dp)
-                ) {
-                    // Highlight box example
-                    Surface(
-                        modifier = Modifier
-                            .fillMaxWidth(0.8f)
-                            .fillMaxHeight(0.12f)
-                            .align(Alignment.Center)
-                            .clip(RoundedCornerShape(8.dp))
-                            .border(
-                                2.dp,
-                                MaterialTheme.colorScheme.primary.copy(alpha = 0.5f),
-                                RoundedCornerShape(8.dp)
-                            )
-                            .background(
-                                MaterialTheme.colorScheme.primary.copy(alpha = 0.3f)
-                            )
-                            .clickable { },
-                        color = Color.Transparent
-                    ) {
-                        // Floating selection menu
-                        Surface(
-                            modifier = Modifier
-                                .align(Alignment.TopCenter)
-                                .offset(y = (-40).dp),
-                            shape = RoundedCornerShape(20.dp),
-                            color = MaterialTheme.colorScheme.inverseSurface,
-                            shadowElevation = 8.dp
-                        ) {
-                            Row(
-                                modifier = Modifier
-                                    .padding(horizontal = 8.dp, vertical = 4.dp),
-                                horizontalArrangement = Arrangement.spacedBy(4.dp)
-                            ) {
-                                ActionChipContent(
-                                    text = "Copy",
-                                    onClick = { }
-                                )
-                                Surface(
-                                    modifier = Modifier
-                                        .fillMaxHeight()
-                                        .width(1.dp),
-                                    color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.3f)
-                                ) { }
-                                ActionChipContent(
-                                    text = "Share",
-                                    onClick = { }
-                                )
-                            }
-                        }
-                    }
-                }
-
-                // Source Link Button
-                Surface(
-                    modifier = Modifier
-                        .align(Alignment.BottomEnd)
-                        .padding(20.dp),
-                    shape = RoundedCornerShape(12.dp),
-                    color = MaterialTheme.colorScheme.primary,
-                    shadowElevation = 4.dp
-                ) {
-                    Row(
-                        modifier = Modifier
-                            .clickable(onClick = onSourceLinkClick)
-                            .padding(horizontal = 20.dp, vertical = 12.dp),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.OpenInNew,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.onPrimary,
-                            modifier = Modifier.size(20.dp)
-                        )
-                        Text(
-                            text = "Source Link",
-                            style = MaterialTheme.typography.labelLarge,
-                            fontWeight = FontWeight.SemiBold,
-                            color = MaterialTheme.colorScheme.onPrimary
-                        )
-                    }
-                }
             }
         }
-    }
-}
 
-@Composable
-private fun ActionChipContent(
-    text: String,
-    onClick: () -> Unit
-) {
-    Text(
-        text = text,
-        style = MaterialTheme.typography.labelSmall,
-        fontWeight = FontWeight.SemiBold,
-        color = MaterialTheme.colorScheme.inverseOnSurface,
-        modifier = Modifier
-            .clickable(onClick = onClick)
-            .padding(horizontal = 12.dp, vertical = 6.dp)
-    )
+        // Screenshot Description Text
+        Spacer(modifier = Modifier.height(12.dp))
+        
+        Column(
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Text(
+                text = screenshot.fileName,
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onSurface,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis
+            )
+            
+            Spacer(modifier = Modifier.height(4.dp))
+            
+            Text(
+                text = "Captured on ${formatTimestamp(screenshot.dateCreated)}",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1
+            )
+        }
+    }
 }
 
 @Composable
@@ -414,108 +288,39 @@ private fun AISummaryCard() {
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun MetadataSection(screenshot: Screenshot) {
-    Surface(
-        modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(16.dp),
-        color = MaterialTheme.colorScheme.surfaceContainerLow
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(20.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Column {
-                Text(
-                    text = "Capture Context",
-                    style = MaterialTheme.typography.labelSmall,
-                    fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
+private fun ExtractedTextSection(
+    ocrText: String?,
+    isEditing: Boolean,
+    onEditModeChange: (Boolean) -> Unit,
+    onTextChanged: (String) -> Unit = {},
+    onGenerateClick: () -> Unit = {}
+) {
+    val clipboardManager = LocalClipboardManager.current
 
-                Spacer(modifier = Modifier.height(8.dp))
-
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(24.dp)
-                ) {
-                    Column {
-                        Text(
-                            text = "Captured",
-                            style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                        Text(
-                            text = formatTimestamp(screenshot.dateCreated),
-                            style = MaterialTheme.typography.labelLarge,
-                            fontWeight = FontWeight.SemiBold,
-                            color = MaterialTheme.colorScheme.onSurface
-                        )
-                    }
-
-                    Column {
-                        Text(
-                            text = "App ID",
-                            style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                        Text(
-                            text = screenshot.appName.ifBlank { "Unknown" },
-                            style = MaterialTheme.typography.labelLarge,
-                            fontWeight = FontWeight.SemiBold,
-                            color = MaterialTheme.colorScheme.onSurface
-                        )
-                    }
-                }
-            }
-
-            // Tags
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                Surface(
-                    shape = RoundedCornerShape(16.dp),
-                    color = MaterialTheme.colorScheme.secondaryContainer
-                ) {
-                    Text(
-                        text = "Fintech",
-                        style = MaterialTheme.typography.labelSmall,
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.onSecondaryContainer,
-                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
-                    )
-                }
-                Surface(
-                    shape = RoundedCornerShape(16.dp),
-                    color = MaterialTheme.colorScheme.secondaryContainer
-                ) {
-                    Text(
-                        text = "Dark Mode",
-                        style = MaterialTheme.typography.labelSmall,
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.onSecondaryContainer,
-                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
-                    )
-                }
-            }
-        }
+    var extractedText by remember {
+        mutableStateOf(ocrText ?: "")
     }
-}
 
-@Composable
-private fun ExtractedTextSection(ocrText: String?) {
-    val extractedLines = ocrText?.split("\n")?.filter { it.isNotBlank() }
-        ?: listOf(
-            "Total Balance: \$142,509.20",
-            "Monthly Portfolio Growth: +12.4% since September",
-            "Assets under management consist of 45% Equity, 30% Fixed Income, and 25% Cryptocurrencies.",
-            "Recommended Action: Rebalance high-risk assets to maintain risk profile."
-        )
+    // Update text when ocrText changes (from ViewModel)
+    LaunchedEffect(ocrText) {
+        extractedText = ocrText ?: ""
+    }
+
+    val hasOcrText = !ocrText.isNullOrBlank()
 
     Surface(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier
+            .fillMaxWidth()
+            .pointerInput(isEditing) {
+                if (isEditing) {
+                    detectTapGestures(onTap = {
+                        onTextChanged(extractedText)
+                        onEditModeChange(false)
+                    })
+                }
+            },
         shape = RoundedCornerShape(16.dp),
         color = MaterialTheme.colorScheme.surfaceContainerLowest,
         shadowElevation = 2.dp
@@ -523,7 +328,7 @@ private fun ExtractedTextSection(ocrText: String?) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(24.dp)
+                .padding(20.dp)
         ) {
             // Header
             Row(
@@ -536,7 +341,7 @@ private fun ExtractedTextSection(ocrText: String?) {
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Icon(
-                        imageVector = Icons.Default.Article,
+                        imageVector = Icons.AutoMirrored.Filled.Article,
                         contentDescription = null,
                         tint = MaterialTheme.colorScheme.primary,
                         modifier = Modifier.size(24.dp)
@@ -549,47 +354,122 @@ private fun ExtractedTextSection(ocrText: String?) {
                     )
                 }
 
-                TextButton(onClick = { }) {
-                    Text(
-                        text = "Copy All",
-                        style = MaterialTheme.typography.labelLarge,
-                        fontWeight = FontWeight.SemiBold,
-                        color = MaterialTheme.colorScheme.primary
-                    )
+                // Edit/Generate and Copy Icons in Rectangle
+                Surface(
+                    shape = RoundedCornerShape(8.dp),
+                    color = MaterialTheme.colorScheme.surfaceContainerHighest,
+                    shadowElevation = 2.dp
+                ) {
+                    Row(
+                        modifier = Modifier.padding(4.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        // Edit or Generate Icon
+                        IconButton(
+                            onClick = {
+                                if (isEditing) {
+                                    onTextChanged(extractedText)
+                                    onEditModeChange(false)
+                                } else if (hasOcrText) {
+                                    onEditModeChange(true)
+                                } else {
+                                    onGenerateClick()
+                                }
+                            },
+                            modifier = Modifier.size(36.dp)
+                        ) {
+                            val icon = when {
+                                isEditing -> Icons.Default.Check
+                                hasOcrText -> Icons.Default.Edit
+                                else -> Icons.Default.AutoAwesome
+                            }
+                            val tint = if (!hasOcrText && !isEditing) {
+                                Color(0xFF4CAF50) // Green for generation icon
+                            } else {
+                                MaterialTheme.colorScheme.onSurfaceVariant
+                            }
+                            Icon(
+                                imageVector = icon,
+                                contentDescription = if (isEditing) "Save" else if (hasOcrText) "Edit" else "Generate",
+                                tint = tint,
+                                modifier = Modifier.size(20.dp)
+                            )
+                        }
+
+                        // Vertical Divider
+                        Surface(
+                            modifier = Modifier
+                                .width(1.dp)
+                                .height(24.dp),
+                            color = MaterialTheme.colorScheme.outlineVariant
+                        ) {}
+
+                        // Copy Icon
+                        IconButton(
+                            onClick = {
+                                clipboardManager.setText(AnnotatedString(extractedText))
+                            },
+                            enabled = hasOcrText,
+                            modifier = Modifier.size(36.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.ContentCopy,
+                                contentDescription = "Copy",
+                                tint = if (hasOcrText) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.38f),
+                                modifier = Modifier.size(20.dp)
+                            )
+                        }
+                    }
                 }
             }
 
             HorizontalDivider(
-                modifier = Modifier.padding(vertical = 12.dp),
+                modifier = Modifier.padding(vertical = 16.dp),
                 color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.15f)
             )
 
-            // Text Lines
-            extractedLines.forEachIndexed { index, line ->
-                Surface(
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(8.dp),
-                    color = Color.Transparent
-                ) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(16.dp),
-                        horizontalArrangement = Arrangement.spacedBy(16.dp)
-                    ) {
+            // Text Content
+            if (isEditing) {
+                TextField(
+                    value = extractedText,
+                    onValueChange = { extractedText = it },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .focusable(),
+                    colors = TextFieldDefaults.colors(
+                        focusedContainerColor = Color.Transparent,
+                        unfocusedContainerColor = Color.Transparent,
+                        focusedIndicatorColor = MaterialTheme.colorScheme.primary,
+                        unfocusedIndicatorColor = MaterialTheme.colorScheme.outline
+                    ),
+                    textStyle = MaterialTheme.typography.bodyLarge,
+                    minLines = 8,
+                    maxLines = 12
+                )
+            } else {
+                // Selectable Text or Placeholder
+                if (hasOcrText) {
+                    SelectionContainer {
                         Text(
-                            text = String.format("%02d", index + 1),
-                            style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.outline,
-                            fontWeight = FontWeight.Medium,
-                            modifier = Modifier.width(24.dp)
-                        )
-                        Text(
-                            text = line,
+                            text = extractedText,
                             style = MaterialTheme.typography.bodyLarge,
                             color = MaterialTheme.colorScheme.onSurface,
-                            lineHeight = 22.sp,
-                            modifier = Modifier.weight(1f)
+                            lineHeight = 20.sp,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
+                } else {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(150.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = "No text extracted yet. Click the generation icon to start OCR.",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                            textAlign = androidx.compose.ui.text.style.TextAlign.Center
                         )
                     }
                 }
@@ -670,29 +550,22 @@ private fun ActionChip(
 }
 
 @Composable
-private fun AIChatBarAndNavigation(
+private fun ChatBarAtBottom(
     query: String,
     onQueryChange: (String) -> Unit,
-    onSendClick: () -> Unit,
-    onGalleryClick: () -> Unit,
-    onIntelligenceClick: () -> Unit,
-    onSettingsClick: () -> Unit
+    onSendClick: () -> Unit
 ) {
-    Column(
-        modifier = Modifier.fillMaxWidth()
+    Box(
+        modifier = Modifier.fillMaxSize()
     ) {
-        // AI Chat Bar
         Surface(
             modifier = Modifier
+                .align(Alignment.BottomCenter)
                 .fillMaxWidth()
-                .padding(horizontal = 24.dp, vertical = 16.dp),
-            shape = RoundedCornerShape(24.dp),
-            color = MaterialTheme.colorScheme.surfaceContainerHighest.copy(alpha = 0.95f),
-            shadowElevation = 8.dp,
-            border = androidx.compose.foundation.BorderStroke(
-                1.dp,
-                MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.2f)
-            )
+                .padding(horizontal = 16.dp, vertical = 12.dp),
+            color = MaterialTheme.colorScheme.surface,
+            shadowElevation = 16.dp,
+            shape = RoundedCornerShape(24.dp)
         ) {
             Row(
                 modifier = Modifier
@@ -704,9 +577,7 @@ private fun AIChatBarAndNavigation(
                 Surface(
                     shape = RoundedCornerShape(10.dp),
                     color = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier
-                        .padding(horizontal = 4.dp)
-                        .size(36.dp)
+                    modifier = Modifier.size(40.dp)
                 ) {
                     Box(contentAlignment = Alignment.Center) {
                         Icon(
@@ -724,7 +595,7 @@ private fun AIChatBarAndNavigation(
                     onValueChange = onQueryChange,
                     placeholder = {
                         Text(
-                            text = "Ask about this image...",
+                            text = "Ask anything about this screenshot...",
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
                         )
@@ -750,100 +621,13 @@ private fun AIChatBarAndNavigation(
                         .background(MaterialTheme.colorScheme.primary)
                 ) {
                     Icon(
-                        imageVector = Icons.Default.Send,
+                        imageVector = Icons.AutoMirrored.Filled.Send,
                         contentDescription = "Send",
                         tint = MaterialTheme.colorScheme.onPrimary,
                         modifier = Modifier.size(22.dp)
                     )
                 }
             }
-        }
-
-        // Bottom Navigation Bar
-        Surface(
-            modifier = Modifier.fillMaxWidth(),
-            color = MaterialTheme.colorScheme.surface,
-            shadowElevation = 8.dp,
-            shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp)
-        ) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 12.dp),
-                horizontalArrangement = Arrangement.SpaceEvenly
-            ) {
-                NavIconButton(
-                    icon = Icons.Default.GridView,
-                    label = "Gallery",
-                    isSelected = true,
-                    onClick = onGalleryClick
-                )
-                NavIconButton(
-                    icon = Icons.Default.AutoAwesome,
-                    label = "Intelligence",
-                    isSelected = false,
-                    onClick = onIntelligenceClick
-                )
-                NavIconButton(
-                    icon = Icons.Default.Settings,
-                    label = "Settings",
-                    isSelected = false,
-                    onClick = onSettingsClick
-                )
-            }
-        }
-    }
-}
-
-@Composable
-private fun NavIconButton(
-    icon: ImageVector,
-    label: String,
-    isSelected: Boolean,
-    onClick: () -> Unit
-) {
-    val backgroundColor = if (isSelected) {
-        MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.3f)
-    } else {
-        Color.Transparent
-    }
-
-    val iconColor = if (isSelected) {
-        MaterialTheme.colorScheme.primary
-    } else {
-        MaterialTheme.colorScheme.onSurfaceVariant
-    }
-
-    val labelColor = if (isSelected) {
-        MaterialTheme.colorScheme.primary
-    } else {
-        MaterialTheme.colorScheme.onSurfaceVariant
-    }
-
-    Surface(
-        shape = RoundedCornerShape(16.dp),
-        color = backgroundColor
-    ) {
-        Column(
-            modifier = Modifier
-                .clickable(onClick = onClick)
-                .padding(horizontal = 20.dp, vertical = 8.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(4.dp)
-        ) {
-            Icon(
-                imageVector = icon,
-                contentDescription = label,
-                tint = iconColor,
-                modifier = Modifier.size(24.dp)
-            )
-            Text(
-                text = label,
-                style = MaterialTheme.typography.labelSmall,
-                fontWeight = FontWeight.SemiBold,
-                color = labelColor,
-                maxLines = 1
-            )
         }
     }
 }

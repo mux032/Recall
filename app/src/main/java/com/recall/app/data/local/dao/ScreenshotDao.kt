@@ -10,6 +10,11 @@ import kotlinx.coroutines.flow.Flow
 
 @Dao
 interface ScreenshotDao {
+    /**
+     * CRITICAL FIX: Removed "GROUP BY id" which was meaningless since id is PRIMARY KEY.
+     * Every row already has a unique id, so GROUP BY did nothing.
+     * The unique index on filePath in ScreenshotEntity now prevents duplicates at DB level.
+     */
     @Query("SELECT * FROM screenshots ORDER BY dateCreated DESC")
     fun getAllScreenshots(): Flow<List<ScreenshotEntity>>
 

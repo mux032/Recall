@@ -59,7 +59,6 @@ fun RecallNavGraph(
             arguments = listOf(navArgument("screenshotId") { type = NavType.StringType })
         ) {
             DetailScreen(
-                onBackClick = { navController.popBackStack() }
             )
         }
     }

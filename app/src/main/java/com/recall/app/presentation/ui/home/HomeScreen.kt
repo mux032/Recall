@@ -16,11 +16,9 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
-import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.lazy.staggeredgrid.LazyVerticalStaggeredGrid
-import androidx.compose.foundation.lazy.staggeredgrid.StaggeredGridCells
-import androidx.compose.foundation.lazy.staggeredgrid.items
+import androidx.compose.foundation.lazy.items as lazyListItems
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -61,8 +59,30 @@ import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import com.recall.app.domain.model.Screenshot
 import com.recall.app.presentation.ui.theme.Inter
+import java.time.Instant
 import java.time.LocalDate
+import java.time.ZoneId
+import java.time.temporal.ChronoUnit
 import java.time.format.DateTimeFormatter
+
+/**
+ * UI item representation for the home screen grid.
+ * This sealed class ensures stable keys for LazyVerticalStaggeredGrid items,
+ * preventing duplicate rendering issues.
+ */
+sealed class UiItem {
+    data class Header(val label: String) : UiItem()
+    data class Screenshot(val screenshot: com.recall.app.domain.model.Screenshot) : UiItem()
+}
+
+/**
+ * Data class for timeline section with header and screenshots.
+ * This structure ensures headers act as section dividers with screenshots below.
+ */
+data class TimelineSection(
+    val label: String,
+    val screenshots: List<com.recall.app.domain.model.Screenshot>
+)
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -76,15 +96,35 @@ fun HomeScreen(
     var searchQuery by remember { mutableStateOf("") }
     var isHistoryDrawerVisible by remember { mutableStateOf(false) }
 
-    // Group screenshots by date
-    val groupedScreenshots = remember(screenshots) {
-        screenshots.groupBy { screenshot ->
-            val date = LocalDate.ofEpochDay(screenshot.timestamp / (24 * 60 * 60 * 1000))
-            when {
-                date == LocalDate.now() -> "Today"
-                date == LocalDate.now().minusDays(1) -> "Yesterday"
-                else -> date.format(DateTimeFormatter.ofPattern("MMM dd"))
-            }
+    // CRITICAL FIX: Group screenshots by timeline section with proper structure
+    // This ensures headers act as section dividers with screenshots displayed BELOW each header
+    //
+    // Previous issue: Using LazyVerticalStaggeredGrid with mixed Header and Screenshot items
+    // caused them to flow into columns side-by-side (masonry layout behavior).
+    //
+    // Solution: Use LazyColumn with TimelineSection structure where each section contains:
+    // 1. A full-width DateSectionHeader
+    // 2. A nested LazyVerticalStaggeredGrid containing only screenshots for that section
+    val timelineSections = remember(screenshots) {
+        // Step 1: Remove duplicates by ID (in case of database duplicates)
+        val uniqueScreenshots = screenshots.distinctBy { it.id }
+
+        // Step 2: Group by timeline label
+        val groupedScreenshots = uniqueScreenshots.groupBy { screenshot ->
+            getTimelineLabel(screenshot.timestamp)
+        }
+
+        // Step 3: Sort groups in chronological order (newest first)
+        val sortedGroups = groupedScreenshots.toSortedMap { a, b ->
+            val order = listOf("Today", "Yesterday", "This Week", "Last Week", "This Month", "Older")
+            val indexA = order.indexOf(a).takeIf { it >= 0 } ?: order.size
+            val indexB = order.indexOf(b).takeIf { it >= 0 } ?: order.size
+            indexA.compareTo(indexB)
+        }
+
+        // Step 4: Create TimelineSection list with stable structure
+        sortedGroups.map { (label, screenshotsForLabel) ->
+            TimelineSection(label = label, screenshots = screenshotsForLabel)
         }
     }
 
@@ -133,27 +173,47 @@ fun HomeScreen(
                     }
                 }
             } else {
-                LazyVerticalStaggeredGrid(
-                    columns = StaggeredGridCells.Adaptive(150.dp),
+                // Calculate grid columns based on screen width
+                // Using a flat LazyColumn structure to avoid nested scrolling issues
+                val numColumns = 2 // Fixed 2-column grid for consistent layout
+                
+                LazyColumn(
                     modifier = Modifier
                         .fillMaxSize()
                         .padding(paddingValues),
                     contentPadding = PaddingValues(horizontal = 16.dp, vertical = 16.dp),
-                    horizontalArrangement = Arrangement.spacedBy(12.dp),
-                    verticalItemSpacing = 12.dp
+                    verticalArrangement = Arrangement.spacedBy(24.dp)
                 ) {
-                    groupedScreenshots.forEach { (dateLabel: String, dateScreenshots: List<Screenshot>) ->
-                        // Date Section Header
-                        item {
-                            DateSectionHeader(label = dateLabel)
+                    timelineSections.forEach { section ->
+                        // Section Header (full-width)
+                        item(key = "header-${section.label}") {
+                            DateSectionHeader(label = section.label, showSubLabel = true)
                         }
 
-                        // Screenshot Items
-                        items(dateScreenshots, key = { it.id }) { screenshot ->
-                            ScreenshotItem(
-                                screenshot = screenshot,
-                                onClick = { onScreenshotClick(screenshot.id) }
-                            )
+                        // Screenshot Grid Items for this section
+                        // Flatten the grid into individual items to avoid nested scrollable containers
+                        val screenshotRows = section.screenshots.chunked(numColumns)
+                        screenshotRows.forEachIndexed { rowIndex, rowScreenshots ->
+                            item(key = "row-${section.label}-$rowIndex") {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                                ) {
+                                    rowScreenshots.forEach { screenshot ->
+                                        ScreenshotItem(
+                                            screenshot = screenshot,
+                                            onClick = { onScreenshotClick(screenshot.id) },
+                                            modifier = Modifier.weight(1f)
+                                        )
+                                    }
+                                    // Fill remaining space if row has only one item
+                                    if (rowScreenshots.size < numColumns) {
+                                        repeat(numColumns - rowScreenshots.size) {
+                                            Spacer(modifier = Modifier.weight(1f))
+                                        }
+                                    }
+                                }
+                            }
                         }
                     }
                 }
@@ -252,7 +312,7 @@ fun CuratorSmartFilters() {
             .padding(horizontal = 16.dp, vertical = 8.dp),
         horizontalArrangement = Arrangement.spacedBy(8.dp)
     ) {
-        items(filters) { filter ->
+        lazyListItems(filters) { filter ->
             SmartFilterChip(
                 label = filter.label,
                 icon = filter.icon,
@@ -322,7 +382,10 @@ fun SmartFilterChip(
 }
 
 @Composable
-fun DateSectionHeader(label: String) {
+fun DateSectionHeader(
+    label: String,
+    showSubLabel: Boolean = false
+) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -343,30 +406,89 @@ fun DateSectionHeader(label: String) {
             color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.2f)
         )
 
-        Spacer(modifier = Modifier.width(12.dp))
+        if (showSubLabel) {
+            Spacer(modifier = Modifier.width(12.dp))
 
-        Text(
-            text = when (label) {
-                "Today" -> LocalDate.now().format(DateTimeFormatter.ofPattern("MMM dd"))
-                "Yesterday" -> LocalDate.now().minusDays(1).format(DateTimeFormatter.ofPattern("MMM dd"))
-                else -> ""
-            },
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.outline,
-            fontWeight = FontWeight.Medium
-        )
+            Text(
+                text = getTimelineSubLabel(label),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.outline,
+                fontWeight = FontWeight.Medium
+            )
+        }
+    }
+}
+
+/**
+ * Returns a timeline label based on the timestamp.
+ * Groups: Today, Yesterday, This Week, Last Week, This Month, Older
+ *
+ * Timeline categories (mutually exclusive, each screenshot assigned to exactly ONE category):
+ * - Today: Screenshots taken today (since midnight local time)
+ * - Yesterday: Screenshots taken yesterday (previous day)
+ * - This Week: Screenshots taken 2-6 days ago (within last 7 days, excluding today/yesterday)
+ * - Last Week: Screenshots taken 7-13 days ago
+ * - This Month: Screenshots taken 14+ days ago but still in the same calendar month
+ * - Older: Screenshots from previous months (more than ~30 days ago or different month)
+ */
+private fun getTimelineLabel(timestamp: Long): String {
+    val now = LocalDate.now()
+    // Convert timestamp (milliseconds since epoch) to LocalDate in system timezone
+    val screenshotDate = Instant.ofEpochMilli(timestamp)
+        .atZone(ZoneId.systemDefault())
+        .toLocalDate()
+
+    val daysDifference = ChronoUnit.DAYS.between(screenshotDate, now)
+
+    return when {
+        // Today: 0 days difference
+        daysDifference == 0L -> "Today"
+        // Yesterday: 1 day difference
+        daysDifference == 1L -> "Yesterday"
+        // This Week: 2-6 days ago (within the last week, but not today/yesterday)
+        daysDifference in 2..6 -> "This Week"
+        // Last Week: 7-13 days ago
+        daysDifference in 7..13 -> "Last Week"
+        // This Month: 14+ days ago but still in the same calendar month and year
+        // Note: This catches items that are too old for "Last Week" but still in current month
+        screenshotDate.monthValue == now.monthValue && screenshotDate.year == now.year -> "This Month"
+        // Older: Everything else (previous months or years)
+        else -> "Older"
+    }
+}
+
+/**
+ * Returns a formatted sub-label for the timeline group.
+ */
+private fun getTimelineSubLabel(label: String): String {
+    val now = LocalDate.now()
+    val formatter = DateTimeFormatter.ofPattern("MMM dd")
+
+    return when (label) {
+        "Today" -> now.format(formatter)
+        "Yesterday" -> now.minusDays(1).format(formatter)
+        "This Week" -> now.minusDays(6).format(formatter) + " - " + now.format(formatter)
+        "Last Week" -> {
+            val lastWeekStart = now.minusDays(13)
+            val lastWeekEnd = now.minusDays(7)
+            lastWeekStart.format(formatter) + " - " + lastWeekEnd.format(formatter)
+        }
+        "This Month" -> now.format(DateTimeFormatter.ofPattern("MMMM yyyy"))
+        "Older" -> ""
+        else -> ""
     }
 }
 
 @Composable
 fun ScreenshotItem(
     screenshot: Screenshot,
-    onClick: () -> Unit
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
 
     Box(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxWidth()
             .aspectRatio(3f / 4f)
             .clip(RoundedCornerShape(12.dp))

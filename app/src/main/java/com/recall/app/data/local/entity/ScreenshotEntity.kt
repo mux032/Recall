@@ -3,10 +3,19 @@ package com.recall.app.data.local.entity
 import androidx.room.ColumnInfo
 import androidx.room.Entity
 import androidx.room.Fts4
+import androidx.room.Index
 import androidx.room.PrimaryKey
 import com.recall.app.domain.model.Screenshot
 
-@Entity(tableName = "screenshots")
+/**
+ * CRITICAL FIX: Added unique index on filePath to prevent duplicate entries for the same physical file.
+ * This ensures that even if multiple workers try to insert the same file simultaneously,
+ * Room will enforce uniqueness at the database level, preventing the duplicate images issue.
+ */
+@Entity(
+    tableName = "screenshots",
+    indices = [Index(value = ["filePath"], unique = true)]
+)
 data class ScreenshotEntity(
     @PrimaryKey val id: String,
     val filePath: String,

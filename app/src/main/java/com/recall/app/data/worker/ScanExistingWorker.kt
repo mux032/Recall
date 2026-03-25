@@ -18,7 +18,6 @@ import kotlinx.coroutines.withContext
 class ScanExistingWorker @AssistedInject constructor(
     @Assisted private val appContext: Context,
     @Assisted workerParams: WorkerParameters,
-    private val ocrProcessor: OcrProcessor,
     private val screenshotRepository: ScreenshotRepository
 ) : CoroutineWorker(appContext, workerParams) {
 
@@ -32,34 +31,7 @@ class ScanExistingWorker @AssistedInject constructor(
             val countAdded = (screenshotRepository as? ScreenshotRepositoryImpl)?.scanExistingScreenshots() ?: 0
             Log.d(TAG, "Found $countAdded new unindexed screenshots in MediaStore")
 
-            // 2. Fetch all screenshots from the Database
-            // Note: In a production app with thousands of photos, we would paginate this or query 'PENDING' ones.
-            val allScreenshots = screenshotRepository.getAllScreenshots().first()
-            
-            // Process those without OCR text
-            val pendingScreenshots = allScreenshots.filter { it.ocrText == null }
-            
-            Log.d(TAG, "Found ${pendingScreenshots.size} screenshots requiring OCR processing")
-
-            var successCount = 0
-            var errorCount = 0
-
-            // 3. Process each pending screenshot
-            for (screenshot in pendingScreenshots) {
-                try {
-                    val extractedText = ocrProcessor.process(screenshot.filePath)
-                    val updatedScreenshot = screenshot.copy(
-                        ocrText = extractedText
-                    )
-                    screenshotRepository.updateScreenshot(updatedScreenshot)
-                    successCount++
-                } catch (e: Exception) {
-                    Log.e(TAG, "Error OCR processing legacy screenshot ${screenshot.id}", e)
-                    errorCount++
-                }
-            }
-
-            Log.d(TAG, "Deep scan complete. Processed $successCount successfully, $errorCount errors.")
+            Log.d(TAG, "Deep scan complete. Added $countAdded screenshots to DB for background OCR processing.")
 
             Result.success()
         } catch (e: Exception) {
