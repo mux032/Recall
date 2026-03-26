@@ -1,6 +1,7 @@
 package com.recall.app.data.repository
 
 import android.content.Context
+import android.os.Build
 import androidx.test.core.app.ApplicationProvider
 import com.recall.app.data.local.dao.ScreenshotDao
 import com.recall.app.domain.usecase.EmbeddingGenerator
@@ -15,7 +16,7 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 
 @RunWith(RobolectricTestRunner::class)
-@Config(manifest=Config.NONE)
+@Config(manifest=Config.NONE, sdk = [Build.VERSION_CODES.Q])
 class ScreenshotRepositoryImplTest {
 
     private lateinit var screenshotDao: ScreenshotDao
@@ -35,7 +36,8 @@ class ScreenshotRepositoryImplTest {
 
     @Test
     fun `scanExistingScreenshots with empty cursor returns 0`() = runTest {
-        // Without adding any shadows, Robolectric's default ContentResolver provides an empty cursor
+        // On Android 10 (Q), no runtime permission is needed for MediaStore
+        // Without adding shadows, Robolectric's default ContentResolver provides an empty cursor
         // for MediaStore queries unless specifically populated.
         val count = repository.scanExistingScreenshots()
         assertEquals(0, count)

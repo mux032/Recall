@@ -35,13 +35,21 @@ class DetailViewModel @Inject constructor(
 
     /**
      * Saves the edited OCR text for the current screenshot.
-     * This updates the database so changes persist across app sessions.
+     * This updates the database with isUserEdited flag set to true,
+     * preventing automatic OCR from overriding user edits.
      */
     fun saveEditedOcrText(editedText: String) {
         viewModelScope.launch {
             val currentScreenshot = _screenshot.value ?: return@launch
-            val updatedScreenshot = currentScreenshot.copy(ocrText = editedText)
-            screenshotRepository.updateScreenshot(updatedScreenshot)
+            val updatedScreenshot = currentScreenshot.copy(
+                ocrText = editedText,
+                isUserEdited = true,
+                userEditedAt = System.currentTimeMillis()
+            )
+            screenshotRepository.saveUserEditedOcrText(
+                id = currentScreenshot.id,
+                editedText = editedText
+            )
             _screenshot.value = updatedScreenshot
         }
     }

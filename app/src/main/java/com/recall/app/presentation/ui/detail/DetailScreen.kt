@@ -98,6 +98,7 @@ fun DetailScreen(
                 screenshot?.let { scr ->
                     ExtractedTextSection(
                         ocrText = scr.ocrText,
+                        isUserEdited = scr.isUserEdited,
                         isEditing = isEditingText,
                         onEditModeChange = { isEditingText = it },
                         onTextChanged = { editedText ->
@@ -292,6 +293,7 @@ private fun AISummaryCard() {
 @Composable
 private fun ExtractedTextSection(
     ocrText: String?,
+    isUserEdited: Boolean = false,
     isEditing: Boolean,
     onEditModeChange: (Boolean) -> Unit,
     onTextChanged: (String) -> Unit = {},
@@ -304,8 +306,11 @@ private fun ExtractedTextSection(
     }
 
     // Update text when ocrText changes (from ViewModel)
+    // Only update if not currently editing to avoid losing user's in-progress edits
     LaunchedEffect(ocrText) {
-        extractedText = ocrText ?: ""
+        if (!isEditing) {
+            extractedText = ocrText ?: ""
+        }
     }
 
     val hasOcrText = !ocrText.isNullOrBlank()
@@ -343,15 +348,25 @@ private fun ExtractedTextSection(
                     Icon(
                         imageVector = Icons.AutoMirrored.Filled.Article,
                         contentDescription = null,
-                        tint = MaterialTheme.colorScheme.primary,
+                        tint = if (isUserEdited) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.primary,
                         modifier = Modifier.size(24.dp)
                     )
-                    Text(
-                        text = "Extracted Text",
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.onSurface
-                    )
+                    Column {
+                        Text(
+                            text = "Extracted Text",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        if (isUserEdited) {
+                            Text(
+                                text = "Edited by you",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.secondary,
+                                maxLines = 1
+                            )
+                        }
+                    }
                 }
 
                 // Edit/Generate and Copy Icons in Rectangle

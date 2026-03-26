@@ -3,19 +3,23 @@ package com.recall.app.data.repository
 import android.content.ContentResolver
 import android.content.Context
 import android.database.Cursor
+import android.os.Build
 import android.provider.MediaStore
 import android.util.Log
 import androidx.room.withTransaction
 import com.recall.app.data.local.dao.ScreenshotDao
 import com.recall.app.data.local.entity.ScreenshotEntity
 import com.recall.app.data.local.entity.toDomainModel
+import com.recall.app.domain.model.ProcessingState
 import com.recall.app.domain.model.Screenshot
 import com.recall.app.domain.repository.ScreenshotRepository
 import com.recall.app.domain.usecase.EmbeddingGenerator
 import com.recall.app.domain.usecase.OcrProcessor
 import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.withContext
 import java.util.UUID
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -64,10 +68,12 @@ class ScreenshotRepositoryImpl @Inject constructor(
             ocrText = screenshot.ocrText,
             category = screenshot.category,
             tagsJson = screenshot.tags.joinToString(","),
-            processingState = "DONE",
-            embeddingByteArray = floatArrayToByteArray(screenshot.embedding)
+            processingState = ProcessingState.Done.value,
+            embeddingByteArray = floatArrayToByteArray(screenshot.embedding),
+            isUserEdited = screenshot.isUserEdited,
+            userEditedAt = screenshot.userEditedAt
         )
-        screenshotDao.insert(entity)
+        screenshotDao.insert(entity) // Return value ignored - caller doesn't need rowId
     }
 
     private fun floatArrayToByteArray(floatArray: FloatArray?): ByteArray? {
@@ -80,7 +86,48 @@ class ScreenshotRepositoryImpl @Inject constructor(
     }
 
     override suspend fun updateScreenshot(screenshot: Screenshot) {
-        addScreenshot(screenshot) // Insert with REPLACE acts as update
+        val existingEntity = screenshotDao.getScreenshotById(screenshot.id)
+
+        // Preserve isUserEdited flag if caller isn't explicitly updating it
+        // This prevents overwriting user edits when the domain model has default isUserEdited = false
+        val shouldPreserveUserEditedFlag = existingEntity?.isUserEdited == true &&
+                                            !screenshot.isUserEdited
+
+        // CRITICAL FIX: Preserve user's edited OCR text to prevent data loss
+        // If isUserEdited flag should be preserved, also preserve the ocrText
+        val finalOcrText = if (shouldPreserveUserEditedFlag && existingEntity != null) {
+            existingEntity.ocrText  // Keep user's edited text
+        } else {
+            screenshot.ocrText
+        }
+
+        val entity = ScreenshotEntity(
+            id = screenshot.id,
+            filePath = screenshot.filePath,
+            fileName = screenshot.fileName,
+            dateCreated = screenshot.dateCreated,
+            dateIndexed = screenshot.dateIndexed,
+            width = screenshot.width,
+            height = screenshot.height,
+            ocrText = finalOcrText,  // Use preserved text
+            category = screenshot.category,
+            tagsJson = screenshot.tags.joinToString(","),
+            processingState = ProcessingState.Done.value,
+            embeddingByteArray = floatArrayToByteArray(screenshot.embedding),
+            isUserEdited = if (shouldPreserveUserEditedFlag) true else screenshot.isUserEdited,
+            userEditedAt = if (shouldPreserveUserEditedFlag) existingEntity?.userEditedAt else screenshot.userEditedAt,
+            ocrRetryCount = screenshot.ocrRetryCount
+        )
+        // Use REPLACE strategy to properly update existing records
+        screenshotDao.insertOrReplace(entity)
+    }
+
+    override suspend fun saveUserEditedOcrText(id: String, editedText: String) {
+        screenshotDao.saveUserEditedOcrText(
+            id = id,
+            editedOcrText = editedText,
+            timestamp = System.currentTimeMillis()
+        )
     }
 
     override suspend fun deleteScreenshot(id: String) {
@@ -89,35 +136,108 @@ class ScreenshotRepositoryImpl @Inject constructor(
 
     override suspend fun processOcr(id: String): Screenshot? {
         val entity = screenshotDao.getScreenshotById(id) ?: return null
-        
-        // Skip if file doesn't exist
-        val file = java.io.File(entity.filePath)
-        if (!file.exists()) return null
 
-        // Run OCR
-        val extractedText = ocrProcessor.process(entity.filePath)
-        
-        // Generate embedding
-        val embedding = extractedText?.let { text ->
-            embeddingGenerator.generate(text)
+        // Skip if user has manually edited the text
+        if (entity.isUserEdited) {
+            Log.d(TAG, "Skipping manual OCR - user has edited screenshot: $id")
+            return entity.toDomainModel()
         }
 
-        // Update database
-        val updatedEntity = entity.copy(
-            ocrText = extractedText,
-            embeddingByteArray = embedding?.let { floatArrayToByteArray(it) },
-            processingState = "DONE",
-            dateIndexed = System.currentTimeMillis()
-        )
+        // Check if file exists
+        val file = java.io.File(entity.filePath)
+        if (!file.exists()) {
+            Log.w(TAG, "File not found: ${entity.filePath}")
+            // Increment retry count for missing file and return updated entity
+            val newRetryCount = entity.ocrRetryCount + 1
+            screenshotDao.incrementOcrRetryCount(id)
+            return entity.copy(ocrRetryCount = newRetryCount).toDomainModel()
+        }
 
-        screenshotDao.update(updatedEntity)
-        return updatedEntity.toDomainModel()
+        try {
+            // Run OCR
+            val extractedText = ocrProcessor.process(entity.filePath)
+
+            // Consolidated null/blank check - return updated entity with incremented retry count
+            if (extractedText.isNullOrBlank()) {
+                Log.w(TAG, "OCR failed or returned empty text for ${entity.filePath}")
+                val newRetryCount = entity.ocrRetryCount + 1
+                screenshotDao.incrementOcrRetryCount(id)
+                // Return updated entity instead of old one
+                return entity.copy(ocrRetryCount = newRetryCount).toDomainModel()
+            }
+
+            // Generate embedding
+            val embedding = extractedText.let { text ->
+                embeddingGenerator.generate(text)
+            }
+
+            // Update database with successful OCR result
+            val updatedEntity = entity.copy(
+                ocrText = extractedText,
+                embeddingByteArray = embedding?.let { floatArrayToByteArray(it) },
+                processingState = ProcessingState.Done.value,
+                dateIndexed = System.currentTimeMillis(),
+                ocrRetryCount = 0  // Reset retry count on success
+            )
+
+            screenshotDao.update(updatedEntity)
+            return updatedEntity.toDomainModel()
+
+        } catch (e: Exception) {
+            Log.e(TAG, "OCR processing failed for ${entity.filePath}", e)
+            // Increment retry count on exception and return updated entity
+            val newRetryCount = entity.ocrRetryCount + 1
+            screenshotDao.incrementOcrRetryCount(id)
+            // Return updated entity instead of throwing exception
+            return entity.copy(ocrRetryCount = newRetryCount).toDomainModel()
+        }
+    }
+
+    override suspend fun insertOrUpdateWithOcr(
+        filePath: String,
+        ocrText: String?,
+        embedding: FloatArray?
+    ): String = withContext(Dispatchers.IO) {
+        val embeddingBytes = embedding?.let { floatArrayToByteArray(it) }
+        screenshotDao.insertOrUpdateWithOcr(
+            filePath = filePath,
+            ocrText = ocrText,
+            embedding = embeddingBytes
+        )
     }
 
     suspend fun scanExistingScreenshots(): Int {
         var addedCount = 0
         var skippedCount = 0
         var errorCount = 0
+
+        // Check permissions first
+        val hasPermission = when {
+            Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU -> {
+                context.checkSelfPermission(android.Manifest.permission.READ_MEDIA_IMAGES) ==
+                    android.content.pm.PackageManager.PERMISSION_GRANTED
+            }
+            Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q -> {
+                // Android 10-12: No runtime permission needed for MediaStore
+                true
+            }
+            else -> {
+                context.checkSelfPermission(android.Manifest.permission.READ_EXTERNAL_STORAGE) ==
+                    android.content.pm.PackageManager.PERMISSION_GRANTED
+            }
+        }
+
+        if (!hasPermission) {
+            Log.e(TAG, "Missing required storage permission")
+            return 0
+        }
+
+        // CRITICAL PERFORMANCE FIX: Load all existing paths ONCE instead of N+1 queries
+        // Before: 500 screenshots = 500 DB queries (one per screenshot)
+        // After: 1 DB query + 500 HashSet lookups (O(1) each)
+        val existingPaths = screenshotDao.getAllScreenshotPaths().toSet()
+        Log.d(TAG, "Loaded ${existingPaths.size} existing screenshot paths for comparison")
+
         val contentResolver: ContentResolver = context.contentResolver
         val uri = MediaStore.Images.Media.EXTERNAL_CONTENT_URI
 
@@ -134,13 +254,13 @@ class ScreenshotRepositoryImpl @Inject constructor(
         // Query ALL images first to debug what's available
         Log.i(TAG, "=== Starting Screenshot Scan Debug ===")
         Log.i(TAG, "Querying MediaStore at: $uri")
-        
+
         // First, query ALL images to see what's in MediaStore
         val allImagesCount = try {
             contentResolver.query(uri, projection, null, null, null)?.use { cursor ->
                 val count = cursor.count
                 Log.i(TAG, "Total images in MediaStore: $count")
-                
+
                 // Log first 5 images for debugging
                 if (cursor.moveToFirst()) {
                     val dataColumn = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.DATA)
@@ -212,9 +332,10 @@ class ScreenshotRepositoryImpl @Inject constructor(
                                 continue
                             }
 
-                            // Check if already exists in DB
-                            val existing = screenshotDao.getScreenshotByPath(filePath)
-                            if (existing != null) {
+                            // CRITICAL FIX: O(1) HashSet lookup instead of DB query
+                            // Before: val existing = screenshotDao.getScreenshotByPath(filePath) // DB query
+                            // After: existingPaths.contains(filePath) // O(1) HashSet lookup
+                            if (existingPaths.contains(filePath)) {
                                 Log.d(TAG, "Skipping duplicate: $filePath")
                                 skippedCount++
                                 continue
@@ -248,7 +369,7 @@ class ScreenshotRepositoryImpl @Inject constructor(
                                 ocrText = null,
                                 category = "Uncategorized",
                                 tagsJson = "",
-                                processingState = "PENDING"
+                                processingState = ProcessingState.Pending.value
                             )
 
                             screenshotDao.insert(entity)

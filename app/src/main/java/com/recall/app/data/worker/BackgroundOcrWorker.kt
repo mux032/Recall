@@ -7,6 +7,7 @@ import androidx.work.CoroutineWorker
 import androidx.work.WorkerParameters
 import com.recall.app.data.local.dao.ScreenshotDao
 import com.recall.app.data.local.entity.ScreenshotEntity
+import com.recall.app.domain.model.ProcessingState
 import com.recall.app.domain.usecase.EmbeddingGenerator
 import com.recall.app.domain.usecase.OcrProcessor
 import dagger.assisted.Assisted
@@ -18,9 +19,12 @@ import kotlinx.coroutines.withContext
 /**
  * Background worker that processes OCR for screenshots that don't have extracted text yet.
  * Prioritizes newer images first (by dateCreated DESC).
- * 
+ *
  * This worker runs periodically to ensure all screenshots have OCR text without blocking
  * the UI or putting load on the device when user is interacting with the app.
+ *
+ * RETRY LOGIC: Tracks ocrRetryCount to prevent infinite loops on persistent failures.
+ * Screenshots with ocrRetryCount >= MAX_OCR_RETRIES are skipped from automatic processing.
  */
 @HiltWorker
 class BackgroundOcrWorker @AssistedInject constructor(
@@ -36,9 +40,13 @@ class BackgroundOcrWorker @AssistedInject constructor(
             Log.d(TAG, "Starting background OCR processing...")
 
             // Get screenshots without OCR text, ordered by newest first
+            // Filter out screenshots that have exceeded max retry count
             val allScreenshots = screenshotDao.getAllScreenshots()
                 .first() // Get first emission from Flow
-                .filter { screenshot -> screenshot.ocrText.isNullOrBlank() }
+                .filter { screenshot -> 
+                    screenshot.ocrText.isNullOrBlank() && 
+                    screenshot.ocrRetryCount < MAX_OCR_RETRIES
+                }
                 .sortedByDescending { screenshot -> screenshot.dateCreated } // Newest first
 
             if (allScreenshots.isEmpty()) {
@@ -103,31 +111,60 @@ class BackgroundOcrWorker @AssistedInject constructor(
      * Process a single screenshot: run OCR and generate embedding
      */
     private suspend fun processScreenshot(screenshot: ScreenshotEntity) {
+        // Skip if user has manually edited the text
+        if (screenshot.isUserEdited) {
+            Log.d(TAG, "Skipping OCR - user has edited this screenshot: ${screenshot.id}")
+            return
+        }
+
+        // Skip if max retries exceeded
+        if (screenshot.ocrRetryCount >= MAX_OCR_RETRIES) {
+            Log.w(TAG, "Skipping OCR - max retries ($MAX_OCR_RETRIES) exceeded for: ${screenshot.id}")
+            return
+        }
+
         // Skip if file doesn't exist
         val file = java.io.File(screenshot.filePath)
         if (!file.exists()) {
             Log.w(TAG, "File not found: ${screenshot.filePath}")
+            // Increment retry count for missing file
+            screenshotDao.incrementOcrRetryCount(screenshot.id)
             return
         }
 
-        // Run OCR
-        val extractedText = ocrProcessor.process(screenshot.filePath)
-        Log.d(TAG, "OCR extracted ${extractedText?.length ?: 0} characters")
+        try {
+            // Run OCR
+            val extractedText = ocrProcessor.process(screenshot.filePath)
+            Log.d(TAG, "OCR extracted ${extractedText?.length ?: 0} characters")
 
-        // Generate embedding if OCR succeeded
-        val embedding = extractedText?.let { text ->
-            embeddingGenerator.generate(text)
+            // Check if OCR returned empty text
+            if (extractedText.isNullOrBlank()) {
+                Log.w(TAG, "OCR returned empty text for: ${screenshot.filePath}")
+                // Increment retry count on empty result
+                screenshotDao.incrementOcrRetryCount(screenshot.id)
+                return
+            }
+
+            // Generate embedding if OCR succeeded
+            val embedding = embeddingGenerator.generate(extractedText)
+
+            // Update database with successful OCR result
+            val updatedScreenshot = screenshot.copy(
+                ocrText = extractedText,
+                embeddingByteArray = embedding?.let { floatToByteArray(it) },
+                processingState = ProcessingState.Done.value,
+                ocrRetryCount = 0  // Reset retry count on success
+            )
+
+            screenshotDao.update(updatedScreenshot)
+            Log.i(TAG, "Updated screenshot: ${screenshot.fileName}")
+            
+        } catch (e: Exception) {
+            Log.e(TAG, "OCR processing failed for ${screenshot.filePath}", e)
+            // Increment retry count on exception
+            screenshotDao.incrementOcrRetryCount(screenshot.id)
+            throw e  // Re-throw to trigger WorkManager retry
         }
-
-        // Update database
-        val updatedScreenshot = screenshot.copy(
-            ocrText = extractedText,
-            embeddingByteArray = embedding?.let { floatToByteArray(it) },
-            processingState = "DONE"
-        )
-
-        screenshotDao.update(updatedScreenshot)
-        Log.i(TAG, "Updated screenshot: ${screenshot.fileName}")
     }
 
     /**
@@ -143,7 +180,13 @@ class BackgroundOcrWorker @AssistedInject constructor(
 
     companion object {
         const val TAG = "BackgroundOcrWorker"
-        
+
+        /**
+         * Maximum number of OCR retry attempts per screenshot.
+         * Prevents infinite loops on persistent OCR failures.
+         */
+        const val MAX_OCR_RETRIES = 3
+
         /**
          * Maximum number of screenshots to process in one run.
          * This prevents the worker from running too long and draining battery.

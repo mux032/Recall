@@ -5,16 +5,26 @@ import androidx.room.Entity
 import androidx.room.Fts4
 import androidx.room.Index
 import androidx.room.PrimaryKey
+import com.recall.app.domain.model.ProcessingState
 import com.recall.app.domain.model.Screenshot
 
 /**
  * CRITICAL FIX: Added unique index on filePath to prevent duplicate entries for the same physical file.
  * This ensures that even if multiple workers try to insert the same file simultaneously,
  * Room will enforce uniqueness at the database level, preventing the duplicate images issue.
+ *
+ * USER EDIT TRACKING: Added isUserEdited and userEditedAt fields to track manual OCR text edits.
+ * When isUserEdited is true, OCR processing will not override the user's edited text.
+ *
+ * RETRY TRACKING: Added ocrRetryCount field to prevent infinite loops on persistent OCR failures.
+ * When ocrRetryCount reaches MAX_RETRIES, the screenshot will no longer be processed automatically.
  */
 @Entity(
     tableName = "screenshots",
-    indices = [Index(value = ["filePath"], unique = true)]
+    indices = [
+        Index(value = ["filePath"], unique = true),
+        Index(value = ["processingState", "isUserEdited"])
+    ]
 )
 data class ScreenshotEntity(
     @PrimaryKey val id: String,
@@ -27,10 +37,17 @@ data class ScreenshotEntity(
     val ocrText: String?,
     val category: String,
     val tagsJson: String,
-    val processingState: String,
+    val processingState: String,  // Keep as String for Room compatibility
     @ColumnInfo(typeAffinity = ColumnInfo.BLOB)
-    val embeddingByteArray: ByteArray? = null
-)
+    val embeddingByteArray: ByteArray? = null,
+    val isUserEdited: Boolean = false,
+    val userEditedAt: Long? = null,
+    val ocrRetryCount: Int = 0
+) {
+    // Helper property to convert between String and ProcessingState
+    val processingStateEnum: ProcessingState
+        get() = ProcessingState.fromValue(processingState)
+}
 
 @Entity(tableName = "screenshots_fts")
 @Fts4(contentEntity = ScreenshotEntity::class)
@@ -51,6 +68,10 @@ fun ScreenshotEntity.toDomainModel(): Screenshot {
         height = height,
         ocrText = ocrText,
         category = category,
-        tags = tagsList
+        tags = tagsList,
+        isUserEdited = isUserEdited,
+        userEditedAt = userEditedAt,
+        ocrRetryCount = ocrRetryCount,
+        processingState = processingState
     )
 }

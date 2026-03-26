@@ -81,7 +81,8 @@ sealed class UiItem {
  */
 data class TimelineSection(
     val label: String,
-    val screenshots: List<com.recall.app.domain.model.Screenshot>
+    val screenshots: List<com.recall.app.domain.model.Screenshot>,
+    val subLabel: String = ""
 )
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -122,9 +123,15 @@ fun HomeScreen(
             indexA.compareTo(indexB)
         }
 
-        // Step 4: Create TimelineSection list with stable structure
+        // Step 4: Create TimelineSection list with stable structure and computed sub-labels
         sortedGroups.map { (label, screenshotsForLabel) ->
-            TimelineSection(label = label, screenshots = screenshotsForLabel)
+            // Compute sub-label based on actual screenshot dates in this group
+            val subLabel = computeTimelineSubLabel(label, screenshotsForLabel)
+            TimelineSection(
+                label = label,
+                screenshots = screenshotsForLabel,
+                subLabel = subLabel
+            )
         }
     }
 
@@ -187,7 +194,11 @@ fun HomeScreen(
                     timelineSections.forEach { section ->
                         // Section Header (full-width)
                         item(key = "header-${section.label}") {
-                            DateSectionHeader(label = section.label, showSubLabel = true)
+                            DateSectionHeader(
+                                label = section.label,
+                                subLabel = section.subLabel,
+                                showSubLabel = true
+                            )
                         }
 
                         // Screenshot Grid Items for this section
@@ -384,6 +395,7 @@ fun SmartFilterChip(
 @Composable
 fun DateSectionHeader(
     label: String,
+    subLabel: String = "",
     showSubLabel: Boolean = false
 ) {
     Row(
@@ -406,11 +418,11 @@ fun DateSectionHeader(
             color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.2f)
         )
 
-        if (showSubLabel) {
+        if (showSubLabel && subLabel.isNotEmpty()) {
             Spacer(modifier = Modifier.width(12.dp))
 
             Text(
-                text = getTimelineSubLabel(label),
+                text = subLabel,
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.outline,
                 fontWeight = FontWeight.Medium
@@ -459,7 +471,60 @@ private fun getTimelineLabel(timestamp: Long): String {
 
 /**
  * Returns a formatted sub-label for the timeline group.
+ * Uses actual screenshot dates for "This Month" and "Older" categories.
  */
+private fun computeTimelineSubLabel(label: String, screenshots: List<com.recall.app.domain.model.Screenshot>): String {
+    val now = LocalDate.now(ZoneId.systemDefault())
+    val formatter = DateTimeFormatter.ofPattern("MMM dd")
+
+    return when (label) {
+        "Today" -> now.format(formatter)
+        "Yesterday" -> now.minusDays(1).format(formatter)
+        "This Week" -> {
+            val oldestDate = screenshots.maxOfOrNull { screenshot ->
+                Instant.ofEpochMilli(screenshot.timestamp)
+                    .atZone(ZoneId.systemDefault())
+                    .toLocalDate()
+                    .toEpochDay()
+            }?.let { epochDay ->
+                LocalDate.ofEpochDay(epochDay)
+            } ?: now.minusDays(6)
+            oldestDate.format(formatter) + " - " + now.format(formatter)
+        }
+        "Last Week" -> {
+            val lastWeekStart = now.minusDays(13)
+            val lastWeekEnd = now.minusDays(7)
+            lastWeekStart.format(formatter) + " - " + lastWeekEnd.format(formatter)
+        }
+        "This Month" -> {
+            // Get the actual month from the oldest screenshot in this group
+            val oldestScreenshotDate = screenshots.minByOrNull { it.timestamp }?.let { screenshot ->
+                Instant.ofEpochMilli(screenshot.timestamp)
+                    .atZone(ZoneId.systemDefault())
+                    .toLocalDate()
+            } ?: now
+            
+            oldestScreenshotDate.format(DateTimeFormatter.ofPattern("MMMM yyyy"))
+        }
+        "Older" -> {
+            // Get the actual month from the oldest screenshot in this group
+            val oldestScreenshotDate = screenshots.minByOrNull { it.timestamp }?.let { screenshot ->
+                Instant.ofEpochMilli(screenshot.timestamp)
+                    .atZone(ZoneId.systemDefault())
+                    .toLocalDate()
+            } ?: now
+            
+            oldestScreenshotDate.format(DateTimeFormatter.ofPattern("MMMM yyyy"))
+        }
+        else -> ""
+    }
+}
+
+/**
+ * Returns a formatted sub-label for the timeline group.
+ * @deprecated Use computeTimelineSubLabel instead which uses actual screenshot dates
+ */
+@Deprecated("Use computeTimelineSubLabel instead")
 private fun getTimelineSubLabel(label: String): String {
     val now = LocalDate.now()
     val formatter = DateTimeFormatter.ofPattern("MMM dd")
