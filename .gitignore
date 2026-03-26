@@ -107,3 +107,4 @@ app/src/main/assets/models/*.bin
 *.pth
 
 
+GITHUB_ISSUES.md
