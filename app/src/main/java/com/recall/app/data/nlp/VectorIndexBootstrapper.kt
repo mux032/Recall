@@ -12,7 +12,7 @@ import javax.inject.Singleton
 @Singleton
 class VectorIndexBootstrapper @Inject constructor(
     private val screenshotDao: ScreenshotDao,
-    private val vectorIndex: VectorIndex
+    private val vectorIndexOptimized: VectorIndexOptimized
 ) {
     fun initialize(applicationScope: CoroutineScope) {
         applicationScope.launch(Dispatchers.IO) {
@@ -37,9 +37,14 @@ class VectorIndexBootstrapper @Inject constructor(
                 Log.i(TAG, "Screenshots with embeddings: $withEmbeddings")
                 Log.i(TAG, "Screenshots without embeddings: $withoutEmbeddings")
 
-                vectorIndex.loadAll(vectorData)
+                // Load into optimized HNSW index
+                vectorIndexOptimized.loadAll(vectorData)
                 Log.i(TAG, "Vector Index loaded with ${vectorData.size} embeddings")
-                Log.i(TAG, "VectorIndex.isReady() = ${vectorIndex.isReady()}")
+                Log.i(TAG, "VectorIndexOptimized.isReady() = ${vectorIndexOptimized.isReady()}")
+                
+                // Log initial metrics
+                val metrics = vectorIndexOptimized.getMetrics()
+                Log.i(TAG, "Initial metrics: $metrics")
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to bootstrap Vector Index", e)
             }

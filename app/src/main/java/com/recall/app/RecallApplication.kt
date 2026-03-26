@@ -2,27 +2,38 @@ package com.recall.app
 
 import android.app.Application
 import android.provider.MediaStore
+import android.util.Log
 import androidx.hilt.work.HiltWorkerFactory
 import androidx.work.Configuration
 import androidx.work.ExistingPeriodicWorkPolicy
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
+import com.recall.app.data.nlp.VectorIndexBootstrapper
 import com.recall.app.data.service.ScreenshotContentObserver
 import com.recall.app.data.worker.BackgroundOcrWorker
+import com.recall.app.domain.usecase.EmbeddingGenerator
 import dagger.hilt.android.HiltAndroidApp
 import javax.inject.Inject
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.MainScope
-import com.recall.app.data.nlp.VectorIndexBootstrapper
+import kotlinx.coroutines.cancel
 import java.util.concurrent.TimeUnit
 
 @HiltAndroidApp
 class RecallApplication : Application(), Configuration.Provider {
+
+    companion object {
+        private const val TAG = "RecallApplication"
+    }
 
     @Inject
     lateinit var workerFactory: HiltWorkerFactory
 
     @Inject
     lateinit var vectorIndexBootstrapper: VectorIndexBootstrapper
+
+    @Inject
+    lateinit var embeddingGenerator: EmbeddingGenerator
 
     private val applicationScope = MainScope()
 
@@ -36,7 +47,9 @@ class RecallApplication : Application(), Configuration.Provider {
     override fun onCreate() {
         super.onCreate()
 
-        // Initialize the in-memory semantic Vector Index
+        Log.i(TAG, "RecallApplication starting...")
+
+        // Initialize the in-memory semantic Vector Index with HNSW
         vectorIndexBootstrapper.initialize(applicationScope)
 
         // Register content observer for new screenshots
@@ -49,6 +62,38 @@ class RecallApplication : Application(), Configuration.Provider {
 
         // Schedule background OCR processing
         scheduleBackgroundOcrProcessing()
+        
+        Log.i(TAG, "RecallApplication initialized successfully")
+    }
+
+    /**
+     * Clean up resources when the application terminates.
+     * This properly closes the ONNX session to prevent memory leaks.
+     */
+    override fun onTerminate() {
+        super.onTerminate()
+        
+        Log.i(TAG, "RecallApplication terminating, cleaning up resources...")
+        
+        try {
+            // Close ONNX session to release native resources
+            embeddingGenerator.close()
+            Log.i(TAG, "ONNX embedding generator closed successfully")
+        } catch (e: Exception) {
+            Log.e(TAG, "Error closing embedding generator", e)
+        }
+        
+        // Unregister content observer
+        try {
+            contentResolver.unregisterContentObserver(contentObserver)
+            Log.i(TAG, "Content observer unregistered")
+        } catch (e: Exception) {
+            Log.e(TAG, "Error unregistering content observer", e)
+        }
+        
+        // Cancel the application scope to clean up coroutines
+        applicationScope.cancel()
+        Log.i(TAG, "Resource cleanup completed")
     }
 
     /**
@@ -57,7 +102,7 @@ class RecallApplication : Application(), Configuration.Provider {
      */
     private fun scheduleBackgroundOcrProcessing() {
         val workManager = WorkManager.getInstance(this)
-        
+
         val ocrWorkRequest = PeriodicWorkRequestBuilder<BackgroundOcrWorker>(
             repeatInterval = 6,
             repeatIntervalTimeUnit = TimeUnit.HOURS

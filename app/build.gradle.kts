@@ -109,7 +109,7 @@ dependencies {
     // ONNX Runtime for Embeddings
     implementation("com.microsoft.onnxruntime:onnxruntime-android:1.16.0")
     implementation("com.microsoft.onnxruntime:onnxruntime-extensions-android:0.10.0")
-    
+
     // Testing
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.7.3")
