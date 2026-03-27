@@ -1,5 +1,12 @@
 package com.recall.app.data.nlp
 
+import android.content.Context
+import androidx.datastore.core.DataStore
+import androidx.datastore.preferences.core.Preferences
+import com.recall.app.data.local.UserPreferences
+import com.recall.app.util.MemoryInfoHelper
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Before
@@ -12,10 +19,36 @@ import java.nio.ByteBuffer
 class VectorIndexOptimizedTest {
 
     private lateinit var vectorIndex: VectorIndexOptimized
+    private lateinit var memoryInfoHelper: MemoryInfoHelper
+    private lateinit var userPreferences: UserPreferences
 
     @Before
     fun setup() {
-        vectorIndex = VectorIndexOptimized()
+        // Create stub implementations for testing
+        val context = org.robolectric.RuntimeEnvironment.getApplication() as Context
+        memoryInfoHelper = MemoryInfoHelper(context)
+        
+        // Create a simple in-memory DataStore mock for testing
+        val testDataStore = object : DataStore<Preferences> {
+            private val preferencesFlow = MutableStateFlow(emptyPreferences())
+            
+            override val data = preferencesFlow
+            
+            override suspend fun updateData(transform: suspend (t: Preferences) -> Preferences): Preferences {
+                val newPrefs = transform(preferencesFlow.value)
+                preferencesFlow.value = newPrefs
+                return newPrefs
+            }
+        }
+        userPreferences = UserPreferences(testDataStore)
+        
+        vectorIndex = VectorIndexOptimized(memoryInfoHelper, userPreferences)
+        // Initialize cache for tests
+        vectorIndex.initializeCache()
+    }
+
+    private fun emptyPreferences(): Preferences {
+        return androidx.datastore.preferences.core.emptyPreferences()
     }
 
     private fun floatArrayToByteArray(array: FloatArray): ByteArray {

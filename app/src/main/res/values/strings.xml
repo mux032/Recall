@@ -77,6 +77,17 @@
     <string name="settings_reindex">Reindex Screenshots</string>
     <string name="settings_delete_ai_data">Delete AI Data</string>
     <string name="settings_version">Version</string>
+    <string name="settings_vector_cache">Vector Cache</string>
+    <string name="settings_vector_cache_title">Vector Cache Limit</string>
+    <string name="settings_vector_cache_description">Control how many embeddings are kept in memory for faster search</string>
+    <string name="settings_vector_cache_auto">Auto (Recommended)</string>
+    <string name="settings_vector_cache_conservative">Conservative (50K)</string>
+    <string name="settings_vector_cache_balanced">Balanced (100K)</string>
+    <string name="settings_vector_cache_aggressive">Aggressive (500K)</string>
+    <string name="settings_vector_cache_unlimited">Unlimited</string>
+    <string name="settings_vector_cache_current">Current limit: %1$d embeddings (~%2$d MB)</string>
+    <string name="settings_vector_cache_device_ram">Device RAM: %1$s</string>
+    <string name="settings_vector_cache_restart_required">Restart app to apply new cache limit</string>
     
     <!-- Model Download -->
     <string name="model_download_title">Preparing AI Models</string>
