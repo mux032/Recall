@@ -6,6 +6,7 @@ import ai.onnxruntime.OnnxTensor
 import ai.onnxruntime.OrtEnvironment
 import ai.onnxruntime.OrtSession
 import com.recall.app.domain.usecase.EmbeddingGenerator
+import com.recall.app.util.MemoryInfoHelper
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -15,22 +16,26 @@ import kotlin.math.sqrt
 
 /**
  * ONNX-based embedding generator using sentence-transformers (all-MiniLM-L6-v2).
- * 
+ *
  * Features:
  * - Singleton pattern ensures single ONNX session instance (prevents memory leaks)
  * - Session created once on first use (lazy initialization)
+ * - Memory-safe initialization with OutOfMemoryError handling
+ * - Graceful degradation: returns null if model can't be loaded
  * - Proper resource cleanup via close() method
- * 
- * Note: The ONNX session is heavy (~50MB) and should only be created once.
+ *
+ * Note: The ONNX session is heavy (~90MB) and should only be created once.
  * This implementation ensures the session is reused across all embedding requests.
  */
 @Singleton
 class OnnxEmbeddingGenerator @Inject constructor(
-    @ApplicationContext private val context: Context
+    @ApplicationContext private val context: Context,
+    private val memoryInfoHelper: MemoryInfoHelper
 ) : EmbeddingGenerator {
 
     companion object {
         private const val TAG = "OnnxEmbeddingGenerator"
+        private const val MIN_FREE_MEMORY_BYTES = 100 * 1024 * 1024L // 100MB minimum
     }
 
     private val tokenizer = WordPieceTokenizer(context, "vocab.txt")
@@ -40,32 +45,71 @@ class OnnxEmbeddingGenerator @Inject constructor(
     private var env: OrtEnvironment? = null
     private var session: OrtSession? = null
     private var isInitialized = false
+    private var initializationFailed = false
+    private var failureReason: String? = null
 
     /**
      * Initialize the ONNX session.
      * Called automatically on first generate() call.
+     * 
+     * Memory-Safe Initialization:
+     * - Checks available memory before loading model
+     * - Catches OutOfMemoryError specifically
+     * - Sets failure flag to prevent retry loops
+     * - Returns gracefully without crashing
      */
-    private fun initializeSession() {
-        if (isInitialized) return
-        
+    private fun initializeSession(): Result<Unit> {
+        if (isInitialized) return Result.success(Unit)
+        if (initializationFailed) return Result.failure(Exception(failureReason ?: "Initialization previously failed"))
+
+        // Check available memory before attempting to load
+        val availableMemory = memoryInfoHelper.getAvailableMemory()
+        if (availableMemory < MIN_FREE_MEMORY_BYTES) {
+            val errorMsg = "Insufficient memory for AI model: ${availableMemory / 1024 / 1024}MB available, need ${MIN_FREE_MEMORY_BYTES / 1024 / 1024}MB"
+            Log.w(TAG, errorMsg)
+            initializationFailed = true
+            failureReason = errorMsg
+            return Result.failure(OutOfMemoryError(errorMsg))
+        }
+
         try {
             env = OrtEnvironment.getEnvironment()
-            
+
             val bytes = context.assets.open("model.onnx").readBytes()
             val sessionOptions = OrtSession.SessionOptions().apply {
                 setOptimizationLevel(OrtSession.SessionOptions.OptLevel.ALL_OPT)
                 setIntraOpNumThreads(2) // Run safely on device CPU without locking
             }
-            
+
             session = env?.createSession(bytes, sessionOptions)
             isInitialized = true
-            
+
             Log.i(TAG, "ONNX session initialized successfully")
+            return Result.success(Unit)
+        } catch (e: OutOfMemoryError) {
+            val errorMsg = "OutOfMemoryError loading AI model: ${e.message}"
+            Log.e(TAG, errorMsg, e)
+            initializationFailed = true
+            failureReason = errorMsg
+            return Result.failure(e)
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to initialize ONNX session", e)
-            throw e
+            val errorMsg = "Failed to initialize ONNX session: ${e.message}"
+            Log.e(TAG, errorMsg, e)
+            initializationFailed = true
+            failureReason = errorMsg
+            return Result.failure(e)
         }
     }
+
+    /**
+     * Check if the model is loaded and ready.
+     */
+    fun isModelLoaded(): Boolean = isInitialized && session != null
+
+    /**
+     * Get the failure reason if initialization failed.
+     */
+    fun getFailureReason(): String? = failureReason
 
     /**
      * Close the ONNX session to release native resources.
@@ -89,7 +133,11 @@ class OnnxEmbeddingGenerator @Inject constructor(
 
         // Initialize session on first use (lazy initialization)
         if (!isInitialized) {
-            initializeSession()
+            val initResult = initializeSession()
+            if (initResult.isFailure) {
+                Log.w(TAG, "Skipping embedding generation: ${initResult.exceptionOrNull()?.message}")
+                return@withContext null
+            }
         }
 
         val currentSession = session ?: return@withContext null
@@ -138,6 +186,9 @@ class OnnxEmbeddingGenerator @Inject constructor(
 
             return@withContext l2Normalize(pooledOutput)
 
+        } catch (e: OutOfMemoryError) {
+            Log.e(TAG, "OutOfMemoryError during embedding generation", e)
+            null
         } catch (e: Exception) {
             Log.e(TAG, "Error generating embedding", e)
             e.printStackTrace()

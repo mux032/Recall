@@ -1,8 +1,10 @@
 package com.recall.app.presentation.ui.home
 
+import android.util.Log
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -22,9 +24,9 @@ import androidx.compose.foundation.lazy.items as lazyListItems
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.History
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
@@ -37,21 +39,28 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextField
 import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.collectAsState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
@@ -59,11 +68,15 @@ import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import com.recall.app.domain.model.Screenshot
 import com.recall.app.presentation.ui.theme.Inter
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
 import java.time.temporal.ChronoUnit
 import java.time.format.DateTimeFormatter
+
+private const val TAG = "SearchFlow"
 
 /**
  * UI item representation for the home screen grid.
@@ -88,7 +101,7 @@ data class TimelineSection(
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun HomeScreen(
-    onSearchClick: () -> Unit,
+    onSearchClick: (String) -> Unit,
     onScreenshotClick: (String) -> Unit,
     onSettingsClick: () -> Unit = {},
     viewModel: HomeViewModel = hiltViewModel()
@@ -153,7 +166,16 @@ fun HomeScreen(
                 CuratorBottomSearchBar(
                     query = searchQuery,
                     onQueryChange = { searchQuery = it },
-                    onSearch = { onSearchClick() }
+                    onSearch = {
+                        // This is called when Enter is pressed
+                        Log.d(TAG, "onSearch called with query: '$searchQuery'")
+                        if (searchQuery.isNotEmpty()) {
+                            Log.d(TAG, "Navigating to SearchScreen with query: '$searchQuery'")
+                            onSearchClick(searchQuery)
+                        } else {
+                            Log.w(TAG, "Empty query, not navigating")
+                        }
+                    }
                 )
             },
             containerColor = MaterialTheme.colorScheme.surface
@@ -680,6 +702,13 @@ fun CuratorBottomSearchBar(
     onQueryChange: (String) -> Unit,
     onSearch: () -> Unit
 ) {
+    val focusRequester = remember { FocusRequester() }
+
+    // Request focus when the search bar is composed
+    LaunchedEffect(Unit) {
+        focusRequester.requestFocus()
+    }
+
     Surface(
         modifier = Modifier
             .fillMaxWidth(),
@@ -698,22 +727,18 @@ fun CuratorBottomSearchBar(
                     .height(56.dp)
                     .clip(RoundedCornerShape(24.dp))
                     .background(MaterialTheme.colorScheme.surfaceContainerHighest)
-                    .padding(horizontal = 4.dp),
+                    .padding(horizontal = 8.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 // AI Icon
-                Box(
-                    modifier = Modifier
-                        .padding(horizontal = 12.dp),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.AutoAwesome,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.size(24.dp)
-                    )
-                }
+                Icon(
+                    imageVector = Icons.Default.AutoAwesome,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(24.dp)
+                )
+
+                Spacer(modifier = Modifier.width(8.dp))
 
                 // Search Input
                 TextField(
@@ -726,7 +751,10 @@ fun CuratorBottomSearchBar(
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     },
-                    modifier = Modifier.weight(1f),
+                    modifier = Modifier
+                        .weight(1f)
+                        .focusRequester(focusRequester)
+                        .focusable(),
                     colors = TextFieldDefaults.colors(
                         focusedContainerColor = Color.Transparent,
                         unfocusedContainerColor = Color.Transparent,
@@ -735,26 +763,30 @@ fun CuratorBottomSearchBar(
                         cursorColor = MaterialTheme.colorScheme.primary
                     ),
                     textStyle = MaterialTheme.typography.bodyLarge.copy(fontFamily = Inter),
-                    singleLine = true
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(
+                        imeAction = ImeAction.Search  // Show Search key on keyboard
+                    ),
+                    keyboardActions = KeyboardActions(
+                        onSearch = {
+                            Log.d(TAG, "TextField onSearch triggered with query: '$query'")
+                            onSearch()
+                        }
+                    )
                 )
-
-                // Send Button
+                
+                // Search Button
                 IconButton(
                     onClick = onSearch,
-                    modifier = Modifier
-                        .padding(4.dp)
-                        .size(40.dp)
-                        .clip(RoundedCornerShape(12.dp))
-                        .background(MaterialTheme.colorScheme.primary),
-                    content = {
-                        Icon(
-                            imageVector = Icons.Default.ArrowUpward,
-                            contentDescription = "Search",
-                            tint = MaterialTheme.colorScheme.onPrimary,
-                            modifier = Modifier.size(24.dp)
-                        )
-                    }
-                )
+                    modifier = Modifier.size(40.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Search,
+                        contentDescription = "Search",
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(24.dp)
+                    )
+                }
             }
         }
     }

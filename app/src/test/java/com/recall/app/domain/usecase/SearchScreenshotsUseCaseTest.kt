@@ -3,14 +3,17 @@ package com.recall.app.domain.usecase
 import com.recall.app.data.nlp.VectorIndexOptimized
 import com.recall.app.domain.model.Screenshot
 import com.recall.app.domain.repository.ScreenshotRepository
-import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Before
 import org.junit.Test
+import org.junit.runner.RunWith
 import org.mockito.kotlin.*
+import org.robolectric.RobolectricTestRunner
+import org.robolectric.annotation.Config
 
+@RunWith(RobolectricTestRunner::class)
+@Config(manifest = Config.NONE)
 class SearchScreenshotsUseCaseTest {
 
     private lateinit var embeddingGenerator: EmbeddingGenerator
@@ -24,6 +27,8 @@ class SearchScreenshotsUseCaseTest {
         vectorIndex = mock()
         screenshotRepository = mock()
         useCase = SearchScreenshotsUseCase(embeddingGenerator, vectorIndex, screenshotRepository)
+        // Clear cache before each test
+        useCase.clearCacheForTest()
     }
 
     @Test
@@ -31,8 +36,11 @@ class SearchScreenshotsUseCaseTest {
         val query = "test query"
         val queryVector = floatArrayOf(0.5f, 0.5f)
 
+        // Mock vector index is ready
         whenever(vectorIndex.isReady()).thenReturn(true)
-        whenever(embeddingGenerator.generate(query)).thenReturn(queryVector)
+
+        // Mock embedding generator - use doReturn for suspend function
+        doReturn(queryVector).whenever(embeddingGenerator).generate(query)
 
         // Mock semantic matches - note: VectorIndexOptimized.search has threshold parameter
         whenever(vectorIndex.search(queryVector, 10, 0.3f)).thenReturn(
@@ -55,6 +63,185 @@ class SearchScreenshotsUseCaseTest {
 
         verify(embeddingGenerator).generate(query)
         verify(vectorIndex).search(queryVector, 10, 0.3f)
+        verify(screenshotRepository).searchFts(query)
+        verify(vectorIndex).isReady()
+    }
+
+    @Test
+    fun `execute with blank query returns empty list without searching`() = runTest {
+        val results = useCase.execute("", 10)
+
+        assertEquals(emptyList<Screenshot>(), results)
+        // Should return early without any searches
+        verify(embeddingGenerator, never()).generate(any())
+        verify(screenshotRepository, never()).searchFts(any())
+    }
+
+    @Test
+    fun `execute with blank query containing only spaces returns empty list`() = runTest {
+        val results = useCase.execute("   ", 10)
+
+        assertEquals(emptyList<Screenshot>(), results)
+        // Should return early without any searches
+        verify(embeddingGenerator, never()).generate(any())
+        verify(screenshotRepository, never()).searchFts(any())
+    }
+
+    @Test
+    fun `execute when AI fails returns FTS results only`() = runTest {
+        val query = "test query"
+
+        whenever(vectorIndex.isReady()).thenReturn(true)
+        doReturn(null).whenever(embeddingGenerator).generate(query)
+
+        val mockScreenshot = Screenshot(
+            id = "id1",
+            filePath = "path",
+            fileName = "file",
+            dateCreated = 0,
+            dateIndexed = 0,
+            width = 0,
+            height = 0
+        )
+        whenever(screenshotRepository.searchFts(query)).thenReturn(listOf(mockScreenshot))
+
+        val results = useCase.execute(query, 10)
+
+        assertEquals(1, results.size)
+        assertEquals("id1", results[0].id)
+        verify(embeddingGenerator).generate(query)
+        verify(vectorIndex, never()).search(any(), any(), any())
+        verify(screenshotRepository).searchFts(query)
+    }
+
+    @Test
+    fun `execute when AI and FTS return same ID returns deduplicated results`() = runTest {
+        val query = "test query"
+        val queryVector = floatArrayOf(0.5f, 0.5f)
+
+        whenever(vectorIndex.isReady()).thenReturn(true)
+        doReturn(queryVector).whenever(embeddingGenerator).generate(query)
+
+        // Both AI and FTS return the same ID
+        whenever(vectorIndex.search(queryVector, 10, 0.3f)).thenReturn(
+            listOf(Pair("id1", 0.9f))
+        )
+
+        val mockScreenshot = Screenshot(
+            id = "id1",
+            filePath = "path",
+            fileName = "file",
+            dateCreated = 0,
+            dateIndexed = 0,
+            width = 0,
+            height = 0
+        )
+        whenever(screenshotRepository.getScreenshotsByIds(listOf("id1"))).thenReturn(listOf(mockScreenshot))
+        whenever(screenshotRepository.searchFts(query)).thenReturn(listOf(mockScreenshot))
+
+        val results = useCase.execute(query, 10)
+
+        // Should be deduplicated - only 1 result, not 2
+        assertEquals(1, results.size)
+        assertEquals("id1", results[0].id)
+        verify(vectorIndex).isReady()
+    }
+
+    @Test
+    fun `execute with more results than limit returns exactly limit results`() = runTest {
+        val query = "test query"
+        val queryVector = floatArrayOf(0.5f, 0.5f)
+
+        whenever(vectorIndex.isReady()).thenReturn(true)
+        doReturn(queryVector).whenever(embeddingGenerator).generate(query)
+
+        // AI returns 5 results, FTS returns 10 results, limit is 10
+        val aiIds = (1..5).map { "ai_id$it" }
+        whenever(vectorIndex.search(queryVector, 10, 0.3f)).thenReturn(
+            aiIds.map { Pair(it, 0.9f) }
+        )
+
+        val aiScreenshots = aiIds.map { id ->
+            Screenshot(id = id, filePath = "path", fileName = "file", dateCreated = 0, dateIndexed = 0, width = 0, height = 0)
+        }
+        whenever(screenshotRepository.getScreenshotsByIds(aiIds)).thenReturn(aiScreenshots)
+
+        val ftsIds = (1..10).map { "fts_id$it" }
+        val ftsScreenshots = ftsIds.map { id ->
+            Screenshot(id = id, filePath = "path", fileName = "file", dateCreated = 0, dateIndexed = 0, width = 0, height = 0)
+        }
+        whenever(screenshotRepository.searchFts(query)).thenReturn(ftsScreenshots)
+
+        val results = useCase.execute(query, 10)
+
+        // Should return exactly 10 results (5 AI + 5 FTS to fill the limit)
+        assertEquals(10, results.size)
+        // AI results should come first
+        assertEquals("ai_id1", results[0].id)
+        assertEquals("ai_id5", results[4].id)
+        // Then FTS results
+        assertEquals("fts_id1", results[5].id)
+        assertEquals("fts_id5", results[9].id)
+    }
+
+    @Test
+    fun `execute when vector index not ready uses FTS only`() = runTest {
+        val query = "test query"
+
+        whenever(vectorIndex.isReady()).thenReturn(false)
+
+        val mockScreenshot = Screenshot(
+            id = "id1",
+            filePath = "path",
+            fileName = "file",
+            dateCreated = 0,
+            dateIndexed = 0,
+            width = 0,
+            height = 0
+        )
+        whenever(screenshotRepository.searchFts(query)).thenReturn(listOf(mockScreenshot))
+
+        val results = useCase.execute(query, 10)
+
+        assertEquals(1, results.size)
+        assertEquals("id1", results[0].id)
+        verify(embeddingGenerator, never()).generate(any())
+        verify(vectorIndex, never()).search(any(), any(), any())
+        verify(screenshotRepository).searchFts(query)
+    }
+
+    @Test
+    fun `execute when AI returns enough results ignores FTS results`() = runTest {
+        val query = "test query"
+        val queryVector = floatArrayOf(0.5f, 0.5f)
+
+        whenever(vectorIndex.isReady()).thenReturn(true)
+        doReturn(queryVector).whenever(embeddingGenerator).generate(query)
+
+        // AI returns 10 results (exactly at limit)
+        val aiIds = (1..10).map { "ai_id$it" }
+        whenever(vectorIndex.search(queryVector, 10, 0.3f)).thenReturn(
+            aiIds.map { Pair(it, 0.9f) }
+        )
+
+        val aiScreenshots = aiIds.map { id ->
+            Screenshot(id = id, filePath = "path", fileName = "file", dateCreated = 0, dateIndexed = 0, width = 0, height = 0)
+        }
+        whenever(screenshotRepository.getScreenshotsByIds(aiIds)).thenReturn(aiScreenshots)
+
+        // FTS also returns results (but will be ignored due to early termination)
+        val ftsScreenshots = listOf(
+            Screenshot(id = "fts_id1", filePath = "path", fileName = "file", dateCreated = 0, dateIndexed = 0, width = 0, height = 0)
+        )
+        whenever(screenshotRepository.searchFts(query)).thenReturn(ftsScreenshots)
+
+        val results = useCase.execute(query, 10)
+
+        // Should return exactly 10 AI results (FTS results are ignored due to early termination)
+        assertEquals(10, results.size)
+        assertEquals("ai_id1", results[0].id)
+        assertEquals("ai_id10", results[9].id)
+        // FTS is still called (async starts eagerly) but results are ignored
         verify(screenshotRepository).searchFts(query)
     }
 }
