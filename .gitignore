@@ -91,6 +91,7 @@ fastlane/readme.md
 .qwen/
 docs/
 planning/
+TABNINE.md
 
 # Test output
 test-*.log

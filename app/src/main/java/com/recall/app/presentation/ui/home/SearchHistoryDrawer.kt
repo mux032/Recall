@@ -31,7 +31,7 @@ import com.recall.app.domain.model.SearchHistoryItem
 fun SearchHistoryDrawer(
     isVisible: Boolean,
     onDismissRequest: () -> Unit,
-    historyItems: List<SearchHistoryItem> = getSampleHistoryItems(),
+    historyItems: List<SearchHistoryItem>,
     onHistoryItemClick: (SearchHistoryItem) -> Unit,
     onHistoryItemDelete: (SearchHistoryItem) -> Unit,
     onClearAllHistory: () -> Unit
@@ -424,38 +424,4 @@ private fun getIconForType(type: HistoryIconType): ImageVector {
         HistoryIconType.DESCRIPTION -> Icons.Default.Description
         HistoryIconType.SEARCH -> Icons.Default.Search
     }
-}
-
-@Composable
-fun getSampleHistoryItems(): List<SearchHistoryItem> {
-    return listOf(
-        SearchHistoryItem(
-            id = "1",
-            query = "receipts from coffee shops",
-            timestamp = System.currentTimeMillis() - (2 * 60 * 60 * 1000),
-            iconType = HistoryIconType.RECEIPT_LONG,
-            timeLabel = "2 hours ago"
-        ),
-        SearchHistoryItem(
-            id = "2",
-            query = "flights to Tokyo",
-            timestamp = System.currentTimeMillis() - (4 * 60 * 60 * 1000),
-            iconType = HistoryIconType.FLIGHT_TAKEOFF,
-            timeLabel = "4 hours ago"
-        ),
-        SearchHistoryItem(
-            id = "3",
-            query = "summarize recent tech news",
-            timestamp = System.currentTimeMillis() - (24 * 60 * 60 * 1000) - (4 * 60 * 60 * 1000),
-            iconType = HistoryIconType.AUTO_AWESOME,
-            timeLabel = "Yesterday, 4:12 PM"
-        ),
-        SearchHistoryItem(
-            id = "4",
-            query = "tax documents 2023",
-            timestamp = System.currentTimeMillis() - (24 * 60 * 60 * 1000) - (10 * 60 * 60 * 1000),
-            iconType = HistoryIconType.DESCRIPTION,
-            timeLabel = "Yesterday, 10:45 AM"
-        )
-    )
 }

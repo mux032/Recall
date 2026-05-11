@@ -1,13 +1,13 @@
 package com.recall.app.domain.usecase
 
+import android.util.Log
+import com.recall.app.data.nlp.VectorIndexOptimized
 import com.recall.app.domain.model.Screenshot
 import com.recall.app.domain.repository.ScreenshotRepository
-import com.recall.app.data.nlp.VectorIndexOptimized
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
-import android.util.Log
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -19,46 +19,35 @@ class SearchScreenshotsUseCase @Inject constructor(
 ) {
     companion object {
         private const val TAG = "SearchScreenshotsUseCase"
-        
+
         /**
          * Minimum cosine similarity score (0.0-1.0) to consider a vector match relevant.
          * Values below 0.3 typically indicate unrelated semantic content.
-         * Tunable based on precision/recall requirements.
          */
         private const val SIMILARITY_THRESHOLD = 0.3f
-        
+
         /**
          * Default maximum number of results to return.
-         * Chosen to balance UX (enough results to scroll) vs performance (avoid excessive DB queries).
          */
         private const val DEFAULT_LIMIT = 10
-        
+
         /**
          * Timeout in milliseconds for AI embedding generation.
          * Prevents hanging searches if the embedding model is slow or unresponsive.
          */
         private const val AI_SEARCH_TIMEOUT_MS = 100L
-        
+
         /**
          * Maximum number of cached query results to store in LRU cache.
-         * Balances memory usage vs cache hit rate for repeated queries.
          */
         private const val MAX_CACHE_SIZE = 100
-        
-        // LRU cache for query results (max 100 queries)
-        private val queryCache = object : LinkedHashMap<String, List<Screenshot>>(10, 0.75f, true) {
-            override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, List<Screenshot>>?): Boolean {
-                return size > MAX_CACHE_SIZE
-            }
-        }
     }
-    
-    /**
-     * Clears the query cache. Used for testing purposes only.
-     */
-    internal fun clearCacheForTest() {
-        synchronized(queryCache) {
-            queryCache.clear()
+
+    // LRU cache for query results — instance-level so each @Singleton instance owns its own
+    // cache. Keeps tests isolated and avoids stale results leaking across test instances.
+    private val queryCache = object : LinkedHashMap<String, List<Screenshot>>(10, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, List<Screenshot>>?): Boolean {
+            return size > MAX_CACHE_SIZE
         }
     }
 
@@ -68,16 +57,12 @@ class SearchScreenshotsUseCase @Inject constructor(
      * with HNSW concurrently with a Room FTS4 search. Results are merged and deduplicated.
      *
      * Features:
-     * - Parallel execution: AI (~50ms) and FTS (~10ms) run concurrently for ~10ms latency reduction
+     * - Parallel execution: AI (~50ms) and FTS (~10ms) run concurrently
      * - O(log n) search time with HNSW instead of O(n²) brute-force
      * - LRU cache for repeated queries (instant responses)
      * - Similarity threshold filtering to exclude irrelevant results
      * - Graceful degradation: If AI embedding fails, FTS results still returned
-     * - Memory-efficient: Processes results in batches to avoid GC pressure
-     *
-     * @param query The search query
-     * @param limit Maximum number of results to return
-     * @return List of screenshots matching the query (merged AI + FTS results)
+     * - AI timeout guard: prevents a slow ONNX model from blocking FTS indefinitely
      */
     suspend fun execute(query: String, limit: Int = DEFAULT_LIMIT): List<Screenshot> = withContext(Dispatchers.IO) {
         if (query.isBlank()) {
@@ -87,9 +72,9 @@ class SearchScreenshotsUseCase @Inject constructor(
         // Check cache first (use query+limit as key)
         val cacheKey = "$query:$limit"
         synchronized(queryCache) {
-            queryCache[cacheKey]?.let { 
+            queryCache[cacheKey]?.let {
                 Log.d(TAG, "Cache hit for query: '$query'")
-                return@withContext it 
+                return@withContext it
             }
         }
 
@@ -122,16 +107,13 @@ class SearchScreenshotsUseCase @Inject constructor(
                     if (vectorMatches.isNotEmpty()) {
                         val screenshots = screenshotRepository.getScreenshotsByIds(vectorMatches.map { it.first })
                         val screenshotMap = screenshots.associateBy { it.id }
-                        
-                        // Check for missing IDs and log warning
-                        val missingIds = vectorMatches.map { it.first } - screenshotMap.keys
+
+                        val missingIds = vectorMatches.map { it.first }.toSet() - screenshotMap.keys
                         if (missingIds.isNotEmpty()) {
                             Log.w(TAG, "Vector search returned ${missingIds.size} IDs not found in database")
                         }
 
-                        vectorMatches.mapNotNull { (id, _) ->
-                            screenshotMap[id]
-                        }
+                        vectorMatches.mapNotNull { (id, _) -> screenshotMap[id] }
                     } else {
                         emptyList()
                     }
@@ -148,6 +130,7 @@ class SearchScreenshotsUseCase @Inject constructor(
             }
         }
 
+        // FTS always runs — captures exact keyword matches that semantic search may miss
         val ftsSearch = async {
             try {
                 screenshotRepository.searchFts(query)
@@ -157,55 +140,43 @@ class SearchScreenshotsUseCase @Inject constructor(
             }
         }
 
-        // Wait for AI results first
+        // Wait for AI results first (higher quality — add these first)
         val aiResults = aiSearch.await()
 
-        // Early termination: if AI returned enough results, skip FTS
-        if (aiResults.size >= limit) {
-            ftsSearch.cancel()
-            synchronized(queryCache) {
-                queryCache[cacheKey] = aiResults.take(limit)
-            }
-            return@withContext aiResults.take(limit)
-        }
-
+        // Collect FTS results (always await — never cancel, as per hybrid search design)
         val ftsResults = ftsSearch.await()
 
-        // Merge results: AI first (higher quality), then FTS
+        // Merge: AI first (semantic quality), then FTS (exact keyword matches), deduplicated
         val results = ArrayList<Screenshot>(limit)
         val seenIds = HashSet<String>(limit)
 
-        // Add AI results first (prioritize semantic matches)
         var aiCount = 0
         for (screenshot in aiResults) {
             if (results.size >= limit) break
-            if (!seenIds.contains(screenshot.id)) {
+            if (seenIds.add(screenshot.id)) {
                 results.add(screenshot)
-                seenIds.add(screenshot.id)
                 aiCount++
             }
         }
         Log.d(TAG, "Added $aiCount screenshots from AI search")
 
-        // Add FTS results (deduplicated)
         var ftsCount = 0
         for (screenshot in ftsResults) {
             if (results.size >= limit) break
-            if (!seenIds.contains(screenshot.id)) {
+            if (seenIds.add(screenshot.id)) {
                 results.add(screenshot)
-                seenIds.add(screenshot.id)
                 ftsCount++
             }
         }
-        Log.d(TAG, "Added $ftsCount screenshots from FTS search")
+        Log.d(TAG, "Added $ftsCount new screenshots from FTS search")
 
         Log.d(TAG, "Search completed: returning ${results.size} total results")
-        
+
         // Cache the result
         synchronized(queryCache) {
             queryCache[cacheKey] = results
         }
-        
+
         return@withContext results
     }
 }

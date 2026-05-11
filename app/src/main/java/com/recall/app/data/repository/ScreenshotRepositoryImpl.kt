@@ -51,9 +51,11 @@ class ScreenshotRepositoryImpl @Inject constructor(
     }
 
     override suspend fun searchFts(query: String): List<Screenshot> {
-        // SQLite FTS matches query strings specifically, we format for prefix match
-        val ftsQuery = "*$query*"
-        return screenshotDao.searchFts(ftsQuery).map { it.toDomainModel() }
+        Log.d("ScreenshotRepository", "searchFts called with query: '$query'")
+        // Pass query as-is to DAO - DAO handles wildcard matching
+        val result = screenshotDao.searchFts(query).map { it.toDomainModel() }
+        Log.d("ScreenshotRepository", "searchFts returned ${result.size} results")
+        return result
     }
 
     override suspend fun addScreenshot(screenshot: Screenshot) {

@@ -16,7 +16,7 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 
 @RunWith(RobolectricTestRunner::class)
-@Config(manifest=Config.NONE, sdk = [Build.VERSION_CODES.Q])
+@Config(manifest = Config.NONE, sdk = [Build.VERSION_CODES.UPSIDE_DOWN_CAKE])
 class ScreenshotRepositoryImplTest {
 
     private lateinit var screenshotDao: ScreenshotDao

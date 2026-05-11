@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.room.Room
 import com.recall.app.data.local.RecallDatabase
 import com.recall.app.data.local.dao.ScreenshotDao
+import com.recall.app.data.local.dao.SearchHistoryDao
 import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
@@ -24,6 +25,9 @@ object DatabaseModule {
     @Provides
     @Singleton
     fun provideRecallDatabase(@ApplicationContext context: Context): RecallDatabase {
+        // WARNING: Destructive migration deletes all data on version upgrade.
+        // This is acceptable during development but MUST be replaced with
+        // proper migrations before production release.
         return Room.databaseBuilder(
             context,
             RecallDatabase::class.java,
@@ -37,5 +41,11 @@ object DatabaseModule {
     @Singleton
     fun provideScreenshotDao(database: RecallDatabase): ScreenshotDao {
         return database.screenshotDao
+    }
+
+    @Provides
+    @Singleton
+    fun provideSearchHistoryDao(database: RecallDatabase): SearchHistoryDao {
+        return database.searchHistoryDao
     }
 }

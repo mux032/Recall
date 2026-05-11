@@ -64,14 +64,29 @@ interface ScreenshotDao {
         expectedState: String = "PENDING"
     ): Int
 
-    // FTS4 query matching against the ocrText
+    /**
+     * Full-text search using FTS4 with wildcard matching.
+     * Automatically appends wildcard (*) to enable prefix matching.
+     * Example: "insta" matches "instagram", "installation", etc.
+     */
     @Query("""
         SELECT screenshots.*
         FROM screenshots
         JOIN screenshots_fts ON screenshots.id = screenshots_fts.docid
-        WHERE screenshots_fts MATCH :query
+        WHERE screenshots_fts MATCH :query || '*'
     """)
     suspend fun searchFts(query: String): List<ScreenshotEntity>
+
+    /**
+     * Rebuild the FTS index by updating all OCR texts.
+     * This is needed after destructive migrations or if FTS index gets corrupted.
+     */
+    @Query("""
+        UPDATE screenshots
+        SET ocrText = ocrText
+        WHERE ocrText IS NOT NULL AND ocrText != ''
+    """)
+    suspend fun rebuildFtsIndex(): Int
 
     /**
      * Insert with IGNORE strategy to prevent crashes on duplicate filePath.
@@ -151,6 +166,8 @@ interface ScreenshotDao {
                 
                 if (rowsUpdated > 0) {
                     Log.d(TAG, "OCR update succeeded: ${existing.id}")
+                    // Rebuild FTS index after OCR update
+                    rebuildFtsIndex()
                 } else {
                     Log.d(TAG, "OCR update skipped - state mismatch: ${existing.id}")
                 }

@@ -103,7 +103,7 @@ fun SearchScreen(
                 is SearchState.Success -> {
                     if (currentState.results.isEmpty()) {
                         Text(
-                            text = "No results found for \"$searchQuery\".",
+                            text = "No results found for \"${searchQuery.text}\".",
                             modifier = Modifier.align(Alignment.Center),
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )

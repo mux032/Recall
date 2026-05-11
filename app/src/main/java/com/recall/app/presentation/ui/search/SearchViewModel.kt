@@ -7,6 +7,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.recall.app.domain.model.Screenshot
 import com.recall.app.domain.usecase.SearchScreenshotsUseCase
+import com.recall.app.domain.usecase.searchhistory.AddSearchHistoryUseCase
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
@@ -31,7 +32,8 @@ sealed class SearchState {
 @HiltViewModel
 class SearchViewModel @Inject constructor(
     savedStateHandle: SavedStateHandle,
-    private val searchScreenshotsUseCase: SearchScreenshotsUseCase
+    private val searchScreenshotsUseCase: SearchScreenshotsUseCase,
+    private val addSearchHistoryUseCase: AddSearchHistoryUseCase
 ) : ViewModel() {
 
     companion object {
@@ -98,6 +100,17 @@ class SearchViewModel @Inject constructor(
 
                 val results = searchScreenshotsUseCase.execute(query)
 
+                // Save to history AFTER successful search
+                if (results.isNotEmpty() || query.length >= 2) {
+                    try {
+                        addSearchHistoryUseCase(query)
+                        Log.d(TAG, "Search saved to history: '$query'")
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Failed to save search history", e)
+                        // Don't fail the search if history save fails
+                    }
+                }
+
                 if (results.isEmpty()) {
                     _state.value = SearchState.Success(emptyList())
                     Log.d(TAG, "Search completed: no results found")
@@ -120,7 +133,7 @@ class SearchViewModel @Inject constructor(
             }
         }
     }
-    
+
     override fun onCleared() {
         super.onCleared()
         Log.d(TAG, "ViewModel cleared, cancelling search scope")

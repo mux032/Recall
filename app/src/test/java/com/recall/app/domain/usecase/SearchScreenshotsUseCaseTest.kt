@@ -27,8 +27,6 @@ class SearchScreenshotsUseCaseTest {
         vectorIndex = mock()
         screenshotRepository = mock()
         useCase = SearchScreenshotsUseCase(embeddingGenerator, vectorIndex, screenshotRepository)
-        // Clear cache before each test
-        useCase.clearCacheForTest()
     }
 
     @Test

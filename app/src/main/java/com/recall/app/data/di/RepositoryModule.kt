@@ -1,7 +1,9 @@
 package com.recall.app.data.di
 
 import com.recall.app.data.repository.ScreenshotRepositoryImpl
+import com.recall.app.data.repository.SearchHistoryRepositoryImpl
 import com.recall.app.domain.repository.ScreenshotRepository
+import com.recall.app.domain.repository.SearchHistoryRepository
 import dagger.Binds
 import dagger.Module
 import dagger.hilt.InstallIn
@@ -20,7 +22,13 @@ abstract class RepositoryModule {
     abstract fun bindScreenshotRepository(
         screenshotRepositoryImpl: ScreenshotRepositoryImpl
     ): ScreenshotRepository
-    
+
+    @Binds
+    @Singleton
+    abstract fun bindSearchHistoryRepository(
+        searchHistoryRepositoryImpl: SearchHistoryRepositoryImpl
+    ): SearchHistoryRepository
+
     @Binds
     @Singleton
     abstract fun bindEmbeddingGenerator(

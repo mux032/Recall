@@ -33,6 +33,7 @@ enum class ModelStatus {
 data class SystemStatus(
     val isFloatingCaptureEnabled: Boolean = true,
     val npuUsage: Int = 14,
+    val cpuUsage: Int = 23,
     val deviceHealth: DeviceHealth = DeviceHealth.OPTIMIZED
 )
 

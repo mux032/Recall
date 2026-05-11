@@ -107,8 +107,10 @@ fun HomeScreen(
     viewModel: HomeViewModel = hiltViewModel()
 ) {
     val screenshots by viewModel.screenshots.collectAsState()
+    val searchHistory by viewModel.searchHistory.collectAsState()
     var searchQuery by remember { mutableStateOf("") }
     var isHistoryDrawerVisible by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
 
     // CRITICAL FIX: Group screenshots by timeline section with proper structure
     // This ensures headers act as section dividers with screenshots displayed BELOW each header
@@ -257,9 +259,26 @@ fun HomeScreen(
         SearchHistoryDrawer(
             isVisible = isHistoryDrawerVisible,
             onDismissRequest = { isHistoryDrawerVisible = false },
-            onHistoryItemClick = { /* Handle history item click */ },
-            onHistoryItemDelete = { /* Handle history item delete */ },
-            onClearAllHistory = { /* Handle clear all history */ }
+            historyItems = searchHistory,
+            onHistoryItemClick = { item ->
+                // Navigate to search with this query
+                onSearchClick(item.query)
+                isHistoryDrawerVisible = false
+            },
+            onHistoryItemDelete = { item ->
+                // Delete single history item
+                // Note: Will be wired to ViewModel in next iteration
+                scope.launch {
+                    viewModel.deleteHistoryItem(item.id)
+                }
+            },
+            onClearAllHistory = {
+                // Clear all history
+                // Note: Will be wired to ViewModel in next iteration
+                scope.launch {
+                    viewModel.clearAllHistory()
+                }
+            }
         )
     }
 }

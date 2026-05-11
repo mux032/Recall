@@ -157,6 +157,10 @@ class BackgroundOcrWorker @AssistedInject constructor(
             )
 
             screenshotDao.update(updatedScreenshot)
+            
+            // Rebuild FTS index to ensure search works after OCR update
+            screenshotDao.rebuildFtsIndex()
+            
             Log.i(TAG, "Updated screenshot: ${screenshot.fileName}")
             
         } catch (e: Exception) {
