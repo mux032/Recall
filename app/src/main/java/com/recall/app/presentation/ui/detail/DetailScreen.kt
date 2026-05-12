@@ -48,6 +48,7 @@ import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import androidx.hilt.navigation.compose.hiltViewModel
+import com.recall.app.BuildConfig
 import com.recall.app.domain.model.Screenshot
 import java.text.SimpleDateFormat
 import java.util.*
@@ -88,9 +89,9 @@ fun DetailScreen(
                 }
             }
 
-            // AI Summary Card
+            // AI Summary Card — only shown when an actual summary is available (Phase 7)
             item {
-                AISummaryCard()
+                AISummaryCard(aiSummary = null)
             }
 
             // Extracted Text Section
@@ -118,12 +119,14 @@ fun DetailScreen(
         }
     }
 
-    // Chat Bar floating at bottom
-    ChatBarAtBottom(
-        query = chatQuery,
-        onQueryChange = { chatQuery = it },
-        onSendClick = { }
-    )
+    // Chat Bar floating at bottom — hidden until AI chat backend is ready (Phase 7)
+    if (BuildConfig.ENABLE_AI_CHAT) {
+        ChatBarAtBottom(
+            query = chatQuery,
+            onQueryChange = { chatQuery = it },
+            onSendClick = { }
+        )
+    }
 }
 
 @Composable
@@ -203,8 +206,15 @@ private fun HeroScreenshotSection(
     }
 }
 
+/**
+ * Displays an AI-generated summary for the current screenshot.
+ *
+ * @param aiSummary The AI-generated summary text, or null if not yet available.
+ *                  When null, a "Coming soon" placeholder is shown instead.
+ *                  Full AI summary support is planned for Phase 7.
+ */
 @Composable
-private fun AISummaryCard() {
+private fun AISummaryCard(aiSummary: String?) {
     Box(
         modifier = Modifier.fillMaxWidth()
     ) {
@@ -277,13 +287,47 @@ private fun AISummaryCard() {
 
                 Spacer(modifier = Modifier.height(16.dp))
 
-                // Summary Text
-                Text(
-                    text = "This capture showcases a minimalist fintech dashboard emphasizing portfolio liquidity and risk distribution. The UI leverages technical teals and deep navy to convey security and market authority.",
-                    style = MaterialTheme.typography.bodyLarge,
-                    color = MaterialTheme.colorScheme.onTertiaryContainer.copy(alpha = 0.9f),
-                    lineHeight = 24.sp
-                )
+                if (aiSummary != null) {
+                    // Display the actual AI-generated summary
+                    Text(
+                        text = aiSummary,
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = MaterialTheme.colorScheme.onTertiaryContainer.copy(alpha = 0.9f),
+                        lineHeight = 24.sp
+                    )
+                } else {
+                    // Placeholder shown until Phase 7 AI summary backend is ready
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 8.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.AutoAwesome,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.onTertiaryContainer.copy(alpha = 0.4f),
+                                modifier = Modifier.size(32.dp)
+                            )
+                            Text(
+                                text = "AI Summary coming soon",
+                                style = MaterialTheme.typography.titleSmall,
+                                fontWeight = FontWeight.SemiBold,
+                                color = MaterialTheme.colorScheme.onTertiaryContainer.copy(alpha = 0.6f)
+                            )
+                            Text(
+                                text = "On-device summarisation will be available in a future update.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onTertiaryContainer.copy(alpha = 0.4f),
+                                textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                            )
+                        }
+                    }
+                }
             }
         }
     }
