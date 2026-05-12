@@ -20,6 +20,7 @@ android {
         vectorDrawables {
             useSupportLibrary = true
         }
+        buildConfigField("boolean", "ENABLE_AI_CHAT", "false")
     }
 
     buildTypes {

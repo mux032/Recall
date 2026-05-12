@@ -51,8 +51,12 @@ class DetailScreenTest {
             .assertExists()
     }
 
+    /**
+     * Chat bar is hidden when BuildConfig.ENABLE_AI_CHAT = false (current build).
+     * It will be re-enabled in Phase 7 when the AI chat backend is ready.
+     */
     @Test
-    fun detailScreen_displaysChatBarAtBottom() {
+    fun detailScreen_chatBarIsHiddenWhenAiChatDisabled() {
         composeTestRule.setContent {
             DetailScreen(
                 onBackClick = {},
@@ -61,64 +65,15 @@ class DetailScreenTest {
             )
         }
 
-        // Chat bar should have AI icon
-        composeTestRule
-            .onNodeWithContentDescription("AI")
-            .assertExists()
-
-        // Chat bar should have input field with placeholder
+        // Chat bar input placeholder should NOT be present
         composeTestRule
             .onNodeWithText("Ask anything about this screenshot.*", useRegex = true)
-            .assertExists()
+            .assertDoesNotExist()
 
-        // Chat bar should have send button
+        // Send button should NOT be present
         composeTestRule
             .onNodeWithContentDescription("Send")
-            .assertExists()
-    }
-
-    @Test
-    fun detailScreen_chatBarAcceptsInput() {
-        composeTestRule.setContent {
-            DetailScreen(
-                onBackClick = {},
-                onSettingsClick = {},
-                screenshot = testScreenshot
-            )
-        }
-
-        // Enter text in chat input
-        composeTestRule
-            .onNodeWithText("Ask anything about this screenshot.*", useRegex = true)
-            .performTextInput("What is this screenshot about?")
-
-        // Verify text was entered
-        composeTestRule
-            .onNodeWithText("What is this screenshot about?")
-            .assertExists()
-    }
-
-    @Test
-    fun detailScreen_chatBarSendButtonIsClickable() {
-        composeTestRule.setContent {
-            DetailScreen(
-                onBackClick = {},
-                onSettingsClick = {},
-                screenshot = testScreenshot
-            )
-        }
-
-        // Enter text first
-        composeTestRule
-            .onNodeWithText("Ask anything about this screenshot.*", useRegex = true)
-            .performTextInput("Test query")
-
-        // Click send button - should not crash
-        composeTestRule
-            .onNodeWithContentDescription("Send")
-            .performClick()
-
-        assertTrue("Send button click handled", true)
+            .assertDoesNotExist()
     }
 
     @Test
@@ -239,7 +194,7 @@ class DetailScreenTest {
             )
         }
 
-        // AI Summary card title should be present
+        // AI Summary card header should be present
         composeTestRule
             .onNodeWithText("On-Device AI Summary")
             .assertExists()
@@ -247,6 +202,31 @@ class DetailScreenTest {
         composeTestRule
             .onNodeWithText("Intelligence Analysis")
             .assertExists()
+
+        // Coming soon placeholder should be shown (no real summary available yet)
+        composeTestRule
+            .onNodeWithText("AI Summary coming soon")
+            .assertExists()
+    }
+
+    @Test
+    fun detailScreen_aiSummaryCard_doesNotShowHardcodedFintechText() {
+        composeTestRule.setContent {
+            DetailScreen(
+                onBackClick = {},
+                onSettingsClick = {},
+                screenshot = testScreenshot
+            )
+        }
+
+        // Hardcoded fintech marketing text must not appear
+        composeTestRule
+            .onNodeWithText("fintech dashboard", substring = true)
+            .assertDoesNotExist()
+
+        composeTestRule
+            .onNodeWithText("portfolio liquidity", substring = true)
+            .assertDoesNotExist()
     }
 
     @Test
@@ -298,8 +278,11 @@ class DetailScreenTest {
         assertTrue("Screen handles null screenshot", true)
     }
 
+    /**
+     * When ENABLE_AI_CHAT = false, the chat bar placeholder text should not be visible.
+     */
     @Test
-    fun detailScreen_chatBarPlaceholderTextIsCorrect() {
+    fun detailScreen_chatBarPlaceholderText_notVisibleWhenDisabled() {
         composeTestRule.setContent {
             DetailScreen(
                 onBackClick = {},
@@ -308,9 +291,9 @@ class DetailScreenTest {
             )
         }
 
-        // Verify the chat bar placeholder text
+        // Chat bar placeholder text should not be present when AI chat is disabled
         composeTestRule
             .onNodeWithText("Ask anything about this screenshot.*", useRegex = true)
-            .assertExists()
+            .assertDoesNotExist()
     }
 }
