@@ -14,8 +14,8 @@ import com.recall.app.data.local.entity.SearchHistoryEntity
  * ⚠️ DEVELOPMENT WARNING: This database uses fallbackToDestructiveMigration()
  * which WILL DELETE ALL DATA when upgrading between versions.
  *
- * Current version: 2 (added SearchHistoryEntity)
- * Previous version: 1 (ScreenshotEntity, FtsScreenshotEntity only)
+ * Current version: 3 (added appName column to ScreenshotEntity)
+ * Previous version: 2 (added SearchHistoryEntity)
  *
  * Before releasing to production:
  * - Create proper Room migrations for all entities
@@ -28,7 +28,7 @@ import com.recall.app.data.local.entity.SearchHistoryEntity
         FtsScreenshotEntity::class,
         SearchHistoryEntity::class
     ],
-    version = 2,
+    version = 3,
     exportSchema = false
 )
 abstract class RecallDatabase : RoomDatabase() {
