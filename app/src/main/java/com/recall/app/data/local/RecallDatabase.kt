@@ -15,6 +15,7 @@ import com.recall.app.data.local.entity.SearchHistoryEntity
  * which WILL DELETE ALL DATA when upgrading between versions.
  *
  * Current version: 2 (added SearchHistoryEntity)
+ * Previous version: 1 (ScreenshotEntity, FtsScreenshotEntity only)
  *
  * Before releasing to production:
  * - Create proper Room migrations for all entities

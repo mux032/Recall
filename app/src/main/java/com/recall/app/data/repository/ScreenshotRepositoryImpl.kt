@@ -323,9 +323,9 @@ class ScreenshotRepositoryImpl @Inject constructor(
                     val widthColumn = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.WIDTH)
                     val heightColumn = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.HEIGHT)
                     val relPathColumn = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.RELATIVE_PATH)
-                    // OWNER_PACKAGE_NAME column index — only valid on API 29+; -1 on older devices
+                    // OWNER_PACKAGE_NAME is guaranteed in the projection on API 29+; absent on older
                     val ownerPackageColumn = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                        cursor.getColumnIndex(MediaStore.Images.Media.OWNER_PACKAGE_NAME)
+                        cursor.getColumnIndexOrThrow(MediaStore.Images.Media.OWNER_PACKAGE_NAME)
                     } else {
                         -1
                     }
