@@ -42,7 +42,10 @@ data class ScreenshotEntity(
     val embeddingByteArray: ByteArray? = null,
     val isUserEdited: Boolean = false,
     val userEditedAt: Long? = null,
-    val ocrRetryCount: Int = 0
+    val ocrRetryCount: Int = 0,
+    /** Package name of the app that created this screenshot (e.g. "com.whatsapp"). Populated from
+     *  MediaStore.Images.Media.OWNER_PACKAGE_NAME on API 29+; empty string on older devices. */
+    val appName: String = ""
 ) {
     // Helper property to convert between String and ProcessingState
     val processingStateEnum: ProcessingState
@@ -72,6 +75,7 @@ fun ScreenshotEntity.toDomainModel(): Screenshot {
         isUserEdited = isUserEdited,
         userEditedAt = userEditedAt,
         ocrRetryCount = ocrRetryCount,
-        processingState = processingState
+        processingState = processingState,
+        appName = appName
     )
 }

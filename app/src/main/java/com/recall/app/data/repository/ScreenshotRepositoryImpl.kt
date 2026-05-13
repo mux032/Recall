@@ -243,15 +243,30 @@ class ScreenshotRepositoryImpl @Inject constructor(
         val contentResolver: ContentResolver = context.contentResolver
         val uri = MediaStore.Images.Media.EXTERNAL_CONTENT_URI
 
-        val projection = arrayOf(
-            MediaStore.Images.Media._ID,
-            MediaStore.Images.Media.DATA,
-            MediaStore.Images.Media.DISPLAY_NAME,
-            MediaStore.Images.Media.DATE_ADDED,
-            MediaStore.Images.Media.WIDTH,
-            MediaStore.Images.Media.HEIGHT,
-            MediaStore.Images.Media.RELATIVE_PATH
-        )
+        // OWNER_PACKAGE_NAME is only available on API 29 (Android 10) and above.
+        // On older devices we omit it from the projection and fall back to an empty string.
+        val projection = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            arrayOf(
+                MediaStore.Images.Media._ID,
+                MediaStore.Images.Media.DATA,
+                MediaStore.Images.Media.DISPLAY_NAME,
+                MediaStore.Images.Media.DATE_ADDED,
+                MediaStore.Images.Media.WIDTH,
+                MediaStore.Images.Media.HEIGHT,
+                MediaStore.Images.Media.RELATIVE_PATH,
+                MediaStore.Images.Media.OWNER_PACKAGE_NAME
+            )
+        } else {
+            arrayOf(
+                MediaStore.Images.Media._ID,
+                MediaStore.Images.Media.DATA,
+                MediaStore.Images.Media.DISPLAY_NAME,
+                MediaStore.Images.Media.DATE_ADDED,
+                MediaStore.Images.Media.WIDTH,
+                MediaStore.Images.Media.HEIGHT,
+                MediaStore.Images.Media.RELATIVE_PATH
+            )
+        }
 
         // Query ALL images first to debug what's available
         Log.i(TAG, "=== Starting Screenshot Scan Debug ===")
@@ -308,6 +323,12 @@ class ScreenshotRepositoryImpl @Inject constructor(
                     val widthColumn = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.WIDTH)
                     val heightColumn = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.HEIGHT)
                     val relPathColumn = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.RELATIVE_PATH)
+                    // OWNER_PACKAGE_NAME is guaranteed in the projection on API 29+; absent on older
+                    val ownerPackageColumn = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                        cursor.getColumnIndexOrThrow(MediaStore.Images.Media.OWNER_PACKAGE_NAME)
+                    } else {
+                        -1
+                    }
 
                     val cursorCount = cursor.count
                     Log.i(TAG, "Pattern '$pattern' found $cursorCount matches in MediaStore")
@@ -324,6 +345,12 @@ class ScreenshotRepositoryImpl @Inject constructor(
                             var width = cursor.getInt(widthColumn)
                             var height = cursor.getInt(heightColumn)
                             val relativePath = cursor.getString(relPathColumn) ?: ""
+                            // Read source app package name on API 29+; empty string on older devices
+                            val appName = if (ownerPackageColumn >= 0) {
+                                cursor.getString(ownerPackageColumn) ?: ""
+                            } else {
+                                ""
+                            }
 
                             Log.d(TAG, "Processing: $fileName | Path: $filePath | RelPath: $relativePath")
 
@@ -371,7 +398,8 @@ class ScreenshotRepositoryImpl @Inject constructor(
                                 ocrText = null,
                                 category = "Uncategorized",
                                 tagsJson = "",
-                                processingState = ProcessingState.Pending.value
+                                processingState = ProcessingState.Pending.value,
+                                appName = appName
                             )
 
                             screenshotDao.insert(entity)
