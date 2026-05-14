@@ -6,6 +6,20 @@ import kotlinx.coroutines.flow.Flow
 
 interface ScreenshotRepository {
     fun getAllScreenshots(): Flow<List<Screenshot>>
+
+    /**
+     * Returns a single page of screenshots ordered newest first.
+     * @param limit  Page size (number of items to load).
+     * @param offset Number of items already loaded (page index × page size).
+     */
+    suspend fun getScreenshotPage(limit: Int, offset: Int): List<Screenshot>
+
+    /**
+     * Returns the total number of screenshots in the database.
+     * Used to determine whether more pages are available.
+     */
+    suspend fun getScreenshotCount(): Int
+
     suspend fun getScreenshotById(id: String): Screenshot?
     suspend fun getScreenshotsByIds(ids: List<String>): List<Screenshot>
     suspend fun searchFts(query: String): List<Screenshot>

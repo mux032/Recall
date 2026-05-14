@@ -42,6 +42,14 @@ class ScreenshotRepositoryImpl @Inject constructor(
         }
     }
 
+    override suspend fun getScreenshotPage(limit: Int, offset: Int): List<Screenshot> {
+        return screenshotDao.getScreenshotPage(limit, offset).map { it.toDomainModel() }
+    }
+
+    override suspend fun getScreenshotCount(): Int {
+        return screenshotDao.getScreenshotCount()
+    }
+
     override suspend fun getScreenshotById(id: String): Screenshot? {
         return screenshotDao.getScreenshotById(id)?.toDomainModel()
     }
