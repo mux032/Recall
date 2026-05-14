@@ -28,6 +28,23 @@ interface ScreenshotDao {
     @Query("SELECT * FROM screenshots WHERE dateCreated >= :since ORDER BY dateCreated DESC")
     fun getRecentScreenshots(since: Long): Flow<List<ScreenshotEntity>>
 
+    /**
+     * Returns a single page of screenshots ordered newest first.
+     * Used by the windowed lazy-loading flow to avoid loading the entire library into RAM.
+     *
+     * @param limit  Number of rows to return (page size).
+     * @param offset Number of rows to skip (page index × page size).
+     */
+    @Query("SELECT * FROM screenshots ORDER BY dateCreated DESC LIMIT :limit OFFSET :offset")
+    suspend fun getScreenshotPage(limit: Int, offset: Int): List<ScreenshotEntity>
+
+    /**
+     * Returns the total number of screenshots in the database.
+     * Used to determine when all pages have been loaded.
+     */
+    @Query("SELECT COUNT(*) FROM screenshots")
+    suspend fun getScreenshotCount(): Int
+
     @Query("SELECT * FROM screenshots WHERE id = :id")
     suspend fun getScreenshotById(id: String): ScreenshotEntity?
 

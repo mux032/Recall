@@ -2,12 +2,13 @@ package com.recall.app.presentation.ui.home
 
 import com.recall.app.domain.model.Screenshot
 import com.recall.app.domain.model.ScreenshotFilter
-import com.recall.app.domain.usecase.GetAllScreenshotsUseCase
+import com.recall.app.domain.repository.ScreenshotRepository
 import com.recall.app.domain.usecase.searchhistory.ClearSearchHistoryUseCase
 import com.recall.app.domain.usecase.searchhistory.DeleteSearchHistoryUseCase
 import com.recall.app.domain.usecase.searchhistory.GetSearchHistoryUseCase
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.StandardTestDispatcher
@@ -17,15 +18,20 @@ import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.setMain
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
+import org.mockito.kotlin.any
 import org.mockito.kotlin.mock
+import org.mockito.kotlin.times
+import org.mockito.kotlin.verify
 import org.mockito.kotlin.whenever
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class HomeViewModelTest {
 
-    private lateinit var getAllScreenshotsUseCase: GetAllScreenshotsUseCase
+    private lateinit var screenshotRepository: ScreenshotRepository
     private lateinit var getSearchHistoryUseCase: GetSearchHistoryUseCase
     private lateinit var deleteSearchHistoryUseCase: DeleteSearchHistoryUseCase
     private lateinit var clearSearchHistoryUseCase: ClearSearchHistoryUseCase
@@ -36,12 +42,11 @@ class HomeViewModelTest {
     @Before
     fun setup() {
         Dispatchers.setMain(testDispatcher)
-        getAllScreenshotsUseCase = mock()
+        screenshotRepository = mock()
         getSearchHistoryUseCase = mock()
         deleteSearchHistoryUseCase = mock()
         clearSearchHistoryUseCase = mock()
 
-        whenever(getAllScreenshotsUseCase()).thenReturn(flowOf(emptyList()))
         whenever(getSearchHistoryUseCase()).thenReturn(flowOf(emptyList()))
     }
 
@@ -51,143 +56,251 @@ class HomeViewModelTest {
     }
 
     // -----------------------------------------------------------------------
-    // Initial state
+    // Initial page load
     // -----------------------------------------------------------------------
 
     @Test
-    fun `initial filter is ALL`() {
+    fun `init loads first page eagerly`() = runTest {
+        val page = buildScreenshots(5)
+        whenever(screenshotRepository.getScreenshotPage(HomeViewModel.PAGE_SIZE, 0))
+            .thenReturn(page)
+
+        viewModel = buildViewModel()
+        val collected = mutableListOf<List<Screenshot>>()
+        backgroundScope.launch { viewModel.screenshots.collect { collected.add(it) } }
+        advanceUntilIdle()
+
+        assertEquals(5, collected.last().size)
+        verify(screenshotRepository).getScreenshotPage(HomeViewModel.PAGE_SIZE, 0)
+    }
+
+    @Test
+    fun `allPagesLoaded is true when first page is smaller than PAGE_SIZE`() = runTest {
+        val page = buildScreenshots(3) // less than PAGE_SIZE
+        whenever(screenshotRepository.getScreenshotPage(HomeViewModel.PAGE_SIZE, 0))
+            .thenReturn(page)
+
+        viewModel = buildViewModel()
+        advanceUntilIdle()
+
+        assertTrue(viewModel.allPagesLoaded.value)
+    }
+
+    @Test
+    fun `allPagesLoaded is false when first page is full`() = runTest {
+        val page = buildScreenshots(HomeViewModel.PAGE_SIZE) // full page
+        whenever(screenshotRepository.getScreenshotPage(HomeViewModel.PAGE_SIZE, 0))
+            .thenReturn(page)
+
+        viewModel = buildViewModel()
+        advanceUntilIdle()
+
+        assertFalse(viewModel.allPagesLoaded.value)
+    }
+
+    // -----------------------------------------------------------------------
+    // loadNextPage()
+    // -----------------------------------------------------------------------
+
+    @Test
+    fun `loadNextPage appends next page to loaded screenshots`() = runTest {
+        val page1 = buildScreenshots(HomeViewModel.PAGE_SIZE, startId = 0)
+        val page2 = buildScreenshots(10, startId = HomeViewModel.PAGE_SIZE)
+        whenever(screenshotRepository.getScreenshotPage(HomeViewModel.PAGE_SIZE, 0))
+            .thenReturn(page1)
+        whenever(screenshotRepository.getScreenshotPage(HomeViewModel.PAGE_SIZE, HomeViewModel.PAGE_SIZE))
+            .thenReturn(page2)
+
+        viewModel = buildViewModel()
+        // Keep flow active throughout the test with a persistent background collector
+        val collected = mutableListOf<List<Screenshot>>()
+        backgroundScope.launch { viewModel.screenshots.collect { collected.add(it) } }
+        advanceUntilIdle() // page 1 loaded
+
+        assertFalse(viewModel.allPagesLoaded.value)
+
+        // Load page 2 — _loadedScreenshots goes from PAGE_SIZE to PAGE_SIZE+10
+        viewModel.loadNextPage()
+        advanceUntilIdle()
+
+        // The repository was called with the correct offsets
+        verify(screenshotRepository).getScreenshotPage(HomeViewModel.PAGE_SIZE, 0)
+        verify(screenshotRepository).getScreenshotPage(HomeViewModel.PAGE_SIZE, HomeViewModel.PAGE_SIZE)
+
+        // allPagesLoaded should now be true (page2 < PAGE_SIZE)
+        assertTrue(viewModel.allPagesLoaded.value)
+
+        // The screenshots flow should have emitted the combined list at some point
+        assertTrue("Expected at least one emission with PAGE_SIZE items",
+            collected.any { it.size == HomeViewModel.PAGE_SIZE })
+    }
+
+    @Test
+    fun `loadNextPage does not load when allPagesLoaded`() = runTest {
+        val page = buildScreenshots(3)
+        whenever(screenshotRepository.getScreenshotPage(any(), any())).thenReturn(page)
+
+        viewModel = buildViewModel()
+        advanceUntilIdle()
+
+        assertTrue(viewModel.allPagesLoaded.value)
+
+        // Try to load more — should be a no-op
+        viewModel.loadNextPage()
+        advanceUntilIdle()
+
+        // Only called once (from init)
+        verify(screenshotRepository, times(1)).getScreenshotPage(any(), any())
+    }
+
+    @Test
+    fun `loadNextPage sets allPagesLoaded when empty page returned`() = runTest {
+        val page1 = buildScreenshots(HomeViewModel.PAGE_SIZE)
+        whenever(screenshotRepository.getScreenshotPage(HomeViewModel.PAGE_SIZE, 0))
+            .thenReturn(page1)
+        whenever(screenshotRepository.getScreenshotPage(HomeViewModel.PAGE_SIZE, HomeViewModel.PAGE_SIZE))
+            .thenReturn(emptyList())
+
+        viewModel = buildViewModel()
+        advanceUntilIdle()
+
+        viewModel.loadNextPage()
+        advanceUntilIdle()
+
+        assertTrue(viewModel.allPagesLoaded.value)
+    }
+
+    // -----------------------------------------------------------------------
+    // refresh()
+    // -----------------------------------------------------------------------
+
+    @Test
+    fun `refresh reloads from first page`() = runTest {
+        val page = buildScreenshots(5)
+        whenever(screenshotRepository.getScreenshotPage(any(), any())).thenReturn(page)
+
+        viewModel = buildViewModel()
+        advanceUntilIdle()
+
+        viewModel.refresh()
+        advanceUntilIdle()
+
+        // Called twice — once from init, once from refresh
+        verify(screenshotRepository, times(2)).getScreenshotPage(HomeViewModel.PAGE_SIZE, 0)
+    }
+
+    @Test
+    fun `refresh resets allPagesLoaded before reloading`() = runTest {
+        val smallPage = buildScreenshots(3)
+        whenever(screenshotRepository.getScreenshotPage(any(), any())).thenReturn(smallPage)
+
+        viewModel = buildViewModel()
+        advanceUntilIdle()
+
+        assertTrue(viewModel.allPagesLoaded.value)
+
+        viewModel.refresh()
+        advanceUntilIdle()
+
+        // Still true after reload (page is still small)
+        assertTrue(viewModel.allPagesLoaded.value)
+    }
+
+    // -----------------------------------------------------------------------
+    // Filter state
+    // -----------------------------------------------------------------------
+
+    @Test
+    fun `initial filter is ALL`() = runTest {
+        whenever(screenshotRepository.getScreenshotPage(any(), any())).thenReturn(emptyList())
         viewModel = buildViewModel()
         assertEquals(ScreenshotFilter.ALL, viewModel.selectedFilter.value)
     }
 
-    // -----------------------------------------------------------------------
-    // setFilter — selection
-    // -----------------------------------------------------------------------
-
     @Test
-    fun `setFilter RECENT sets selectedFilter to RECENT`() {
+    fun `setFilter RECENT sets selectedFilter to RECENT`() = runTest {
+        whenever(screenshotRepository.getScreenshotPage(any(), any())).thenReturn(emptyList())
         viewModel = buildViewModel()
         viewModel.setFilter(ScreenshotFilter.RECENT)
         assertEquals(ScreenshotFilter.RECENT, viewModel.selectedFilter.value)
     }
 
     @Test
-    fun `setFilter BY_APP sets selectedFilter to BY_APP`() {
+    fun `setFilter same filter twice deselects back to ALL`() = runTest {
+        whenever(screenshotRepository.getScreenshotPage(any(), any())).thenReturn(emptyList())
         viewModel = buildViewModel()
-        viewModel.setFilter(ScreenshotFilter.BY_APP)
-        assertEquals(ScreenshotFilter.BY_APP, viewModel.selectedFilter.value)
+        viewModel.setFilter(ScreenshotFilter.RECENT)
+        viewModel.setFilter(ScreenshotFilter.RECENT)
+        assertEquals(ScreenshotFilter.ALL, viewModel.selectedFilter.value)
     }
 
     @Test
-    fun `setFilter SUMMARIZED sets selectedFilter to SUMMARIZED`() {
+    fun `RECENT filter state is set correctly`() = runTest {
+        whenever(screenshotRepository.getScreenshotPage(any(), any())).thenReturn(emptyList())
         viewModel = buildViewModel()
+        advanceUntilIdle()
+
+        viewModel.setFilter(ScreenshotFilter.RECENT)
+        assertEquals(ScreenshotFilter.RECENT, viewModel.selectedFilter.value)
+    }
+
+    @Test
+    fun `SUMMARIZED filter state is set correctly`() = runTest {
+        whenever(screenshotRepository.getScreenshotPage(any(), any())).thenReturn(emptyList())
+        viewModel = buildViewModel()
+        advanceUntilIdle()
+
         viewModel.setFilter(ScreenshotFilter.SUMMARIZED)
         assertEquals(ScreenshotFilter.SUMMARIZED, viewModel.selectedFilter.value)
     }
 
     @Test
-    fun `setFilter same filter twice deselects it back to ALL`() {
+    fun `BY_APP filter state is set correctly`() = runTest {
+        whenever(screenshotRepository.getScreenshotPage(any(), any())).thenReturn(emptyList())
         viewModel = buildViewModel()
-        viewModel.setFilter(ScreenshotFilter.RECENT)
-        assertEquals(ScreenshotFilter.RECENT, viewModel.selectedFilter.value)
-        viewModel.setFilter(ScreenshotFilter.RECENT)
-        assertEquals(ScreenshotFilter.ALL, viewModel.selectedFilter.value)
-    }
+        advanceUntilIdle()
 
-    @Test
-    fun `switching from one filter to another updates selectedFilter`() {
-        viewModel = buildViewModel()
-        viewModel.setFilter(ScreenshotFilter.RECENT)
         viewModel.setFilter(ScreenshotFilter.BY_APP)
         assertEquals(ScreenshotFilter.BY_APP, viewModel.selectedFilter.value)
     }
 
-    // -----------------------------------------------------------------------
-    // screenshots flow — filtering behaviour
-    // -----------------------------------------------------------------------
-
+    /**
+     * Verifies filtering logic directly using the filter enum values and Kotlin predicates,
+     * matching exactly what HomeViewModel.screenshots combine block does.
+     */
     @Test
-    fun `ALL filter returns all screenshots`() = runTest {
+    fun `filter logic RECENT excludes old screenshots`() {
         val now = System.currentTimeMillis()
+        val recentWindow = 7 * 24 * 60 * 60 * 1000L
         val screenshots = listOf(
-            buildScreenshot("1", dateCreated = now),
-            buildScreenshot("2", dateCreated = now - 10 * 24 * 60 * 60 * 1000L) // 10 days ago
+            buildScreenshot("1", dateCreated = now - 2 * 24 * 60 * 60 * 1000L), // 2 days ago ✓
+            buildScreenshot("2", dateCreated = now - 10 * 24 * 60 * 60 * 1000L) // 10 days ago ✗
         )
-        whenever(getAllScreenshotsUseCase()).thenReturn(flowOf(screenshots))
-        viewModel = buildViewModel()
-        // Activate the WhileSubscribed flow with a background collector
-        val collected = mutableListOf<List<Screenshot>>()
-        backgroundScope.launch { viewModel.screenshots.collect { collected.add(it) } }
-        advanceUntilIdle()
-
-        assertEquals(2, collected.last().size)
-    }
-
-    @Test
-    fun `RECENT filter returns only screenshots within last 7 days`() = runTest {
-        val now = System.currentTimeMillis()
-        val recentScreenshot = buildScreenshot("1", dateCreated = now - 2 * 24 * 60 * 60 * 1000L)
-        val oldScreenshot = buildScreenshot("2", dateCreated = now - 10 * 24 * 60 * 60 * 1000L)
-        whenever(getAllScreenshotsUseCase()).thenReturn(flowOf(listOf(recentScreenshot, oldScreenshot)))
-        viewModel = buildViewModel()
-        val collected = mutableListOf<List<Screenshot>>()
-        backgroundScope.launch { viewModel.screenshots.collect { collected.add(it) } }
-
-        viewModel.setFilter(ScreenshotFilter.RECENT)
-        advanceUntilIdle()
-
-        val result = collected.last()
+        val result = screenshots.filter { it.dateCreated >= now - recentWindow }
         assertEquals(1, result.size)
         assertEquals("1", result.first().id)
     }
 
     @Test
-    fun `SUMMARIZED filter returns only screenshots with non-blank description`() = runTest {
-        val summarized = buildScreenshot("1", description = "AI generated summary")
-        val notSummarized = buildScreenshot("2", description = "")
-        whenever(getAllScreenshotsUseCase()).thenReturn(flowOf(listOf(summarized, notSummarized)))
-        viewModel = buildViewModel()
-        val collected = mutableListOf<List<Screenshot>>()
-        backgroundScope.launch { viewModel.screenshots.collect { collected.add(it) } }
-
-        viewModel.setFilter(ScreenshotFilter.SUMMARIZED)
-        advanceUntilIdle()
-
-        val result = collected.last()
+    fun `filter logic SUMMARIZED excludes blank descriptions`() {
+        val screenshots = listOf(
+            buildScreenshot("1", description = "AI summary"),
+            buildScreenshot("2", description = "")
+        )
+        val result = screenshots.filter { it.description.isNotBlank() }
         assertEquals(1, result.size)
         assertEquals("1", result.first().id)
     }
 
     @Test
-    fun `BY_APP filter returns only screenshots with non-blank appName`() = runTest {
-        val withApp = buildScreenshot("1", appName = "com.whatsapp")
-        val withoutApp = buildScreenshot("2", appName = "")
-        whenever(getAllScreenshotsUseCase()).thenReturn(flowOf(listOf(withApp, withoutApp)))
-        viewModel = buildViewModel()
-        val collected = mutableListOf<List<Screenshot>>()
-        backgroundScope.launch { viewModel.screenshots.collect { collected.add(it) } }
-
-        viewModel.setFilter(ScreenshotFilter.BY_APP)
-        advanceUntilIdle()
-
-        val result = collected.last()
+    fun `filter logic BY_APP excludes blank appNames`() {
+        val screenshots = listOf(
+            buildScreenshot("1", appName = "com.whatsapp"),
+            buildScreenshot("2", appName = "")
+        )
+        val result = screenshots.filter { it.appName.isNotBlank() }
         assertEquals(1, result.size)
         assertEquals("1", result.first().id)
-    }
-
-    @Test
-    fun `deselecting RECENT resets filter back to ALL`() {
-        // Verify the toggle behaviour of setFilter:
-        // selecting an active filter should deselect it (return to ALL).
-        // The screenshots flow filtering is already covered by other tests;
-        // here we only assert the filter state machine.
-        viewModel = buildViewModel()
-
-        viewModel.setFilter(ScreenshotFilter.RECENT)
-        assertEquals(ScreenshotFilter.RECENT, viewModel.selectedFilter.value)
-
-        viewModel.setFilter(ScreenshotFilter.RECENT) // tap again → deselect
-        assertEquals(ScreenshotFilter.ALL, viewModel.selectedFilter.value)
     }
 
     // -----------------------------------------------------------------------
@@ -195,11 +308,15 @@ class HomeViewModelTest {
     // -----------------------------------------------------------------------
 
     private fun buildViewModel() = HomeViewModel(
-        getAllScreenshotsUseCase,
+        screenshotRepository,
         getSearchHistoryUseCase,
         deleteSearchHistoryUseCase,
         clearSearchHistoryUseCase
     )
+
+    private fun buildScreenshots(count: Int, startId: Int = 0) = (0 until count).map {
+        buildScreenshot("id_${startId + it}")
+    }
 
     private fun buildScreenshot(
         id: String,

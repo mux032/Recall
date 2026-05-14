@@ -112,9 +112,21 @@ fun HomeScreen(
     val screenshots by viewModel.screenshots.collectAsState()
     val searchHistory by viewModel.searchHistory.collectAsState()
     val selectedFilter by viewModel.selectedFilter.collectAsState()
+    val isLoadingMore by viewModel.isLoadingMore.collectAsState()
+    val allPagesLoaded by viewModel.allPagesLoaded.collectAsState()
     var searchQuery by remember { mutableStateOf("") }
     var isHistoryDrawerVisible by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
+    val listState = androidx.compose.foundation.lazy.rememberLazyListState()
+
+    // Trigger loadNextPage() when the user scrolls within 5 items of the bottom
+    LaunchedEffect(listState.firstVisibleItemIndex, screenshots.size) {
+        val totalItems = listState.layoutInfo.totalItemsCount
+        val lastVisible = listState.firstVisibleItemIndex + listState.layoutInfo.visibleItemsInfo.size
+        if (totalItems > 0 && lastVisible >= totalItems - 5 && !allPagesLoaded) {
+            viewModel.loadNextPage()
+        }
+    }
 
     // CRITICAL FIX: Group screenshots by timeline section with proper structure
     // This ensures headers act as section dividers with screenshots displayed BELOW each header
@@ -216,6 +228,7 @@ fun HomeScreen(
                 val numColumns = 2 // Fixed 2-column grid for consistent layout
                 
                 LazyColumn(
+                    state = listState,
                     modifier = Modifier
                         .fillMaxSize()
                         .padding(paddingValues),
@@ -255,6 +268,24 @@ fun HomeScreen(
                                         }
                                     }
                                 }
+                            }
+                        }
+                    }
+
+                    // Loading footer — shown while fetching the next page
+                    item(key = "footer-loading") {
+                        if (isLoadingMore) {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 16.dp),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                androidx.compose.material3.CircularProgressIndicator(
+                                    modifier = Modifier.size(24.dp),
+                                    strokeWidth = 2.dp,
+                                    color = MaterialTheme.colorScheme.primary.copy(alpha = 0.6f)
+                                )
                             }
                         }
                     }
