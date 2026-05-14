@@ -24,6 +24,7 @@ import androidx.compose.foundation.lazy.items as lazyListItems
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Apps
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Search
@@ -67,6 +68,7 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import com.recall.app.domain.model.Screenshot
+import com.recall.app.domain.model.ScreenshotFilter
 import com.recall.app.presentation.ui.theme.Inter
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -108,6 +110,7 @@ fun HomeScreen(
 ) {
     val screenshots by viewModel.screenshots.collectAsState()
     val searchHistory by viewModel.searchHistory.collectAsState()
+    val selectedFilter by viewModel.selectedFilter.collectAsState()
     var searchQuery by remember { mutableStateOf("") }
     var isHistoryDrawerVisible by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
@@ -161,7 +164,10 @@ fun HomeScreen(
                         onHistoryClick = { isHistoryDrawerVisible = true },
                         onSettingsClick = onSettingsClick
                     )
-                    CuratorSmartFilters()
+                    CuratorSmartFilters(
+                        selectedFilter = selectedFilter,
+                        onFilterSelected = { viewModel.setFilter(it) }
+                    )
                 }
             },
             bottomBar = {
@@ -351,11 +357,15 @@ fun CuratorTopAppBar(
 }
 
 @Composable
-fun CuratorSmartFilters() {
+fun CuratorSmartFilters(
+    selectedFilter: ScreenshotFilter,
+    onFilterSelected: (ScreenshotFilter) -> Unit
+) {
+    // Each entry maps a display label + icon to its ScreenshotFilter value.
     val filters = listOf(
-        FilterChipData("Recent", Icons.Default.History, isSelected = true),
-        FilterChipData("By App", Icons.Default.History, isSelected = false),
-        FilterChipData("Summarized", Icons.Default.AutoAwesome, isSelected = false)
+        FilterChipData("Recent",    Icons.Default.History,     ScreenshotFilter.RECENT),
+        FilterChipData("By App",    Icons.Default.Apps,        ScreenshotFilter.BY_APP),
+        FilterChipData("Summarized",Icons.Default.AutoAwesome, ScreenshotFilter.SUMMARIZED)
     )
 
     LazyRow(
@@ -364,12 +374,12 @@ fun CuratorSmartFilters() {
             .padding(horizontal = 16.dp, vertical = 8.dp),
         horizontalArrangement = Arrangement.spacedBy(8.dp)
     ) {
-        lazyListItems(filters) { filter ->
+        lazyListItems(filters) { chip ->
             SmartFilterChip(
-                label = filter.label,
-                icon = filter.icon,
-                isSelected = filter.isSelected,
-                onClick = { }
+                label = chip.label,
+                icon = chip.icon,
+                isSelected = selectedFilter == chip.filter,
+                onClick = { onFilterSelected(chip.filter) }
             )
         }
     }
@@ -378,7 +388,7 @@ fun CuratorSmartFilters() {
 data class FilterChipData(
     val label: String,
     val icon: ImageVector,
-    val isSelected: Boolean
+    val filter: ScreenshotFilter
 )
 
 @Composable

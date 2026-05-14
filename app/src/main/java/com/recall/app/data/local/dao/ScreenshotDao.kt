@@ -21,6 +21,13 @@ interface ScreenshotDao {
     @Query("SELECT * FROM screenshots ORDER BY dateCreated DESC")
     fun getAllScreenshots(): Flow<List<ScreenshotEntity>>
 
+    /**
+     * Returns screenshots created after [since] (epoch ms), ordered newest first.
+     * Used to power the RECENT filter (last 7 days = System.currentTimeMillis() - 7 * 86_400_000).
+     */
+    @Query("SELECT * FROM screenshots WHERE dateCreated >= :since ORDER BY dateCreated DESC")
+    fun getRecentScreenshots(since: Long): Flow<List<ScreenshotEntity>>
+
     @Query("SELECT * FROM screenshots WHERE id = :id")
     suspend fun getScreenshotById(id: String): ScreenshotEntity?
 
