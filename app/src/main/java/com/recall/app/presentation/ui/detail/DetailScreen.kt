@@ -27,9 +27,12 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.focusable
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
-import androidx.compose.material.icons.automirrored.filled.Send
-import androidx.compose.material.icons.automirrored.filled.Article
+import androidx.compose.material.icons.automirrored.filled.*
 import androidx.compose.material3.*
+import android.content.Context
+import android.content.Intent
+import androidx.core.content.FileProvider
+import java.io.File
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -60,20 +63,75 @@ import androidx.compose.foundation.gestures.detectTapGestures
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun DetailScreen(
+    onNavigateBack: () -> Unit = {},
+    onScreenshotDeleted: () -> Unit = {},
     viewModel: DetailViewModel = hiltViewModel()
 ) {
     val screenshot by viewModel.screenshot.collectAsState()
+    val isDeleting by viewModel.isDeleting.collectAsState()
     var chatQuery by remember { mutableStateOf("") }
     var isEditingText by remember { mutableStateOf(false) }
+    var showDeleteDialog by remember { mutableStateOf(false) }
+    val context = LocalContext.current
+
+    // Collect one-shot navigation events
+    LaunchedEffect(Unit) {
+        viewModel.navigationEvent.collect { event ->
+            when (event) {
+                // After deletion navigate via onScreenshotDeleted so the caller
+                // can signal HomeScreen to refresh before popping the back stack
+                is DetailNavigationEvent.NavigateBack -> onScreenshotDeleted()
+            }
+        }
+    }
+
+    // Delete confirmation dialog
+    if (showDeleteDialog) {
+        AlertDialog(
+            onDismissRequest = { showDeleteDialog = false },
+            title = { Text("Delete Screenshot") },
+            text = { Text("Are you sure you want to delete this screenshot? This cannot be undone.") },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        showDeleteDialog = false
+                        viewModel.deleteScreenshot()
+                    },
+                    enabled = !isDeleting
+                ) {
+                    if (isDeleting) {
+                        CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                    } else {
+                        Text("Delete", color = MaterialTheme.colorScheme.error)
+                    }
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDeleteDialog = false }) {
+                    Text("Cancel")
+                }
+            }
+        )
+    }
 
     Scaffold(
         containerColor = MaterialTheme.colorScheme.surface,
-        modifier = Modifier.pointerInput(Unit) {
-            detectTapGestures(onTap = {
-                // This will be handled inside ExtractedTextSection if needed, 
-                // but we can also handle it here for global clicks.
-            })
-        }
+        topBar = {
+            TopAppBar(
+                title = {},
+                navigationIcon = {
+                    IconButton(onClick = onNavigateBack) {
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                            contentDescription = "Back"
+                        )
+                    }
+                },
+                colors = TopAppBarDefaults.topAppBarColors(
+                    containerColor = MaterialTheme.colorScheme.surface
+                )
+            )
+        },
     ) { paddingValues ->
         LazyColumn(
             modifier = Modifier
@@ -114,7 +172,14 @@ fun DetailScreen(
 
             // Suggested Actions
             item {
-                SuggestedActions()
+                SuggestedActions(
+                    onDeleteClick = { showDeleteDialog = true },
+                    onShareClick = {
+                        screenshot?.let { scr ->
+                            shareScreenshot(context, scr.filePath)
+                        }
+                    }
+                )
             }
         }
     }
@@ -538,7 +603,10 @@ private fun ExtractedTextSection(
 }
 
 @Composable
-private fun SuggestedActions() {
+private fun SuggestedActions(
+    onDeleteClick: () -> Unit = {},
+    onShareClick: () -> Unit = {}
+) {
     Column {
         Text(
             text = "Recommended Actions",
@@ -555,6 +623,17 @@ private fun SuggestedActions() {
                 .horizontalScroll(rememberScrollState()),
             horizontalArrangement = Arrangement.spacedBy(12.dp)
         ) {
+            ActionChip(
+                icon = Icons.Default.Share,
+                label = "Share",
+                onClick = onShareClick
+            )
+            ActionChip(
+                icon = Icons.Default.Delete,
+                label = "Delete",
+                onClick = onDeleteClick,
+                tint = MaterialTheme.colorScheme.error
+            )
             ActionChip(
                 icon = Icons.Default.CalendarToday,
                 label = "Add to Calendar",
@@ -578,7 +657,8 @@ private fun SuggestedActions() {
 private fun ActionChip(
     icon: ImageVector,
     label: String,
-    onClick: () -> Unit
+    onClick: () -> Unit,
+    tint: Color = MaterialTheme.colorScheme.onSurfaceVariant
 ) {
     Surface(
         shape = RoundedCornerShape(16.dp),
@@ -595,14 +675,17 @@ private fun ActionChip(
             Icon(
                 imageVector = icon,
                 contentDescription = null,
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                tint = tint,
                 modifier = Modifier.size(20.dp)
             )
             Text(
                 text = label,
                 style = MaterialTheme.typography.labelLarge,
                 fontWeight = FontWeight.SemiBold,
-                color = MaterialTheme.colorScheme.onSurface
+                color = if (tint == MaterialTheme.colorScheme.onSurfaceVariant)
+                    MaterialTheme.colorScheme.onSurface
+                else
+                    tint
             )
         }
     }
@@ -698,7 +781,29 @@ private fun formatTimestamp(timestamp: Long): String {
     return sdf.format(Date(timestamp))
 }
 
-@Composable
+/**
+ * Launches the system share sheet for the screenshot at [filePath].
+ * Uses [FileProvider] to generate a content URI safe for sharing with other apps.
+ */
+private fun shareScreenshot(context: Context, filePath: String) {
+    val file = File(filePath)
+    if (!file.exists()) return
+
+    val uri = FileProvider.getUriForFile(
+        context,
+        "${context.packageName}.fileprovider",
+        file
+    )
+
+    val intent = Intent(Intent.ACTION_SEND).apply {
+        type = "image/*"
+        putExtra(Intent.EXTRA_STREAM, uri)
+        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+    }
+
+    context.startActivity(Intent.createChooser(intent, "Share screenshot"))
+}
+
 private fun getSampleScreenshot(): Screenshot {
     return Screenshot(
         id = "sample_1",

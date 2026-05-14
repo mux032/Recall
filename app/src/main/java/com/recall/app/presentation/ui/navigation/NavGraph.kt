@@ -32,13 +32,14 @@ fun RecallNavGraph(
         navController = navController,
         startDestination = Screen.Home.route
     ) {
-        composable(Screen.Home.route) {
+        composable(Screen.Home.route) { backStackEntry ->
             HomeScreen(
                 onSearchClick = { query -> navController.navigate(Screen.Search.createRoute(query)) },
                 onSettingsClick = { navController.navigate(Screen.Settings.route) },
                 onScreenshotClick = { screenshotId ->
                     navController.navigate(Screen.Detail.createRoute(screenshotId))
-                }
+                },
+                navBackStackEntry = backStackEntry
             )
         }
 
@@ -65,6 +66,14 @@ fun RecallNavGraph(
             arguments = listOf(navArgument("screenshotId") { type = NavType.StringType })
         ) {
             DetailScreen(
+                onNavigateBack = { navController.popBackStack() },
+                onScreenshotDeleted = {
+                    // Signal HomeScreen to refresh its list before navigating back
+                    navController.previousBackStackEntry
+                        ?.savedStateHandle
+                        ?.set("screenshot_deleted", true)
+                    navController.popBackStack()
+                }
             )
         }
     }
