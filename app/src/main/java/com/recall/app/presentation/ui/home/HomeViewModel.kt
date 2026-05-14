@@ -80,13 +80,15 @@ class HomeViewModel @Inject constructor(
         )
 
     /**
-     * Sets the active filter. Selecting the same filter a second time deselects it (returns to ALL).
+     * Sets the active filter.
+     * - Tapping [ScreenshotFilter.ALL] always resets to ALL (no toggle needed).
+     * - Tapping any other filter while it is already active deselects it (returns to ALL).
      */
     fun setFilter(filter: ScreenshotFilter) {
-        _selectedFilter.value = if (_selectedFilter.value == filter) {
-            ScreenshotFilter.ALL
-        } else {
-            filter
+        _selectedFilter.value = when {
+            filter == ScreenshotFilter.ALL -> ScreenshotFilter.ALL
+            _selectedFilter.value == filter -> ScreenshotFilter.ALL
+            else -> filter
         }
     }
 

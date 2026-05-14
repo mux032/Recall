@@ -26,6 +26,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Apps
 import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
@@ -363,6 +364,7 @@ fun CuratorSmartFilters(
 ) {
     // Each entry maps a display label + icon to its ScreenshotFilter value.
     val filters = listOf(
+        FilterChipData("All",       Icons.Default.GridView,    ScreenshotFilter.ALL),
         FilterChipData("Recent",    Icons.Default.History,     ScreenshotFilter.RECENT),
         FilterChipData("By App",    Icons.Default.Apps,        ScreenshotFilter.BY_APP),
         FilterChipData("Summarized",Icons.Default.AutoAwesome, ScreenshotFilter.SUMMARIZED)
