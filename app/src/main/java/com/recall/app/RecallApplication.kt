@@ -53,7 +53,7 @@ class RecallApplication : Application(), Configuration.Provider {
         vectorIndexBootstrapper.initialize(applicationScope)
 
         // Register content observer for new screenshots
-        contentObserver = ScreenshotContentObserver(this)
+        contentObserver = ScreenshotContentObserver(this, applicationScope)
         contentResolver.registerContentObserver(
             MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
             true,
@@ -83,8 +83,9 @@ class RecallApplication : Application(), Configuration.Provider {
             Log.e(TAG, "Error closing embedding generator", e)
         }
         
-        // Unregister content observer
+        // Unregister content observer and cancel pending debounce jobs
         try {
+            contentObserver.destroy()
             contentResolver.unregisterContentObserver(contentObserver)
             Log.i(TAG, "Content observer unregistered")
         } catch (e: Exception) {
