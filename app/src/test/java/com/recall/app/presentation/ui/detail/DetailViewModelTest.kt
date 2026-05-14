@@ -3,19 +3,26 @@ package com.recall.app.presentation.ui.detail
 import androidx.lifecycle.SavedStateHandle
 import com.recall.app.domain.model.Screenshot
 import com.recall.app.domain.repository.ScreenshotRepository
+import android.os.Build
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.*
 import org.junit.After
 import org.junit.Assert.*
 import org.junit.Before
 import org.junit.Test
+import org.junit.runner.RunWith
 import org.mockito.kotlin.*
+import org.robolectric.RobolectricTestRunner
+import org.robolectric.annotation.Config
 
 /**
  * Unit tests for DetailViewModel.
  * Tests the ViewModel logic for loading and displaying screenshot details.
  */
+@RunWith(RobolectricTestRunner::class)
+@Config(manifest = Config.NONE, sdk = [Build.VERSION_CODES.UPSIDE_DOWN_CAKE])
 @OptIn(ExperimentalCoroutinesApi::class)
 class DetailViewModelTest {
 
@@ -227,6 +234,98 @@ class DetailViewModelTest {
             ocrText = ocrText,
             appName = appName
         )
+    }
+
+    // -----------------------------------------------------------------------
+    // deleteScreenshot()
+    // -----------------------------------------------------------------------
+
+    @Test
+    fun `deleteScreenshot calls repository with correct screenshotId`() = runTest {
+        val testScreenshotId = "test_screenshot_123"
+        whenever(screenshotRepository.getScreenshotById(testScreenshotId))
+            .thenReturn(createTestScreenshot(testScreenshotId))
+
+        viewModel = DetailViewModel(screenshotRepository, savedStateHandle)
+        testDispatcher.scheduler.advanceUntilIdle()
+
+        viewModel.deleteScreenshot()
+        testDispatcher.scheduler.advanceUntilIdle()
+
+        verify(screenshotRepository).deleteScreenshot(testScreenshotId)
+    }
+
+    @Test
+    fun `deleteScreenshot emits NavigateBack event after deletion`() = runTest {
+        val testScreenshotId = "test_screenshot_123"
+        whenever(screenshotRepository.getScreenshotById(testScreenshotId))
+            .thenReturn(createTestScreenshot(testScreenshotId))
+
+        viewModel = DetailViewModel(screenshotRepository, savedStateHandle)
+        testDispatcher.scheduler.advanceUntilIdle()
+
+        val events = mutableListOf<DetailNavigationEvent>()
+        val job = launch { viewModel.navigationEvent.collect { events.add(it) } }
+
+        viewModel.deleteScreenshot()
+        testDispatcher.scheduler.advanceUntilIdle()
+
+        assertEquals(1, events.size)
+        assertTrue(events.first() is DetailNavigationEvent.NavigateBack)
+
+        job.cancel()
+    }
+
+    @Test
+    fun `deleteScreenshot resets isDeleting to false after completion`() = runTest {
+        val testScreenshotId = "test_screenshot_123"
+        whenever(screenshotRepository.getScreenshotById(testScreenshotId))
+            .thenReturn(createTestScreenshot(testScreenshotId))
+
+        viewModel = DetailViewModel(screenshotRepository, savedStateHandle)
+        testDispatcher.scheduler.advanceUntilIdle()
+
+        viewModel.deleteScreenshot()
+        testDispatcher.scheduler.advanceUntilIdle()
+
+        assertFalse(viewModel.isDeleting.value)
+    }
+
+    @Test
+    fun `deleteScreenshot does not call repository a second time while already deleting`() = runTest {
+        val testScreenshotId = "test_screenshot_123"
+        whenever(screenshotRepository.getScreenshotById(testScreenshotId))
+            .thenReturn(createTestScreenshot(testScreenshotId))
+
+        viewModel = DetailViewModel(screenshotRepository, savedStateHandle)
+        testDispatcher.scheduler.advanceUntilIdle()
+
+        // Both calls happen synchronously — second sees _isDeleting=true immediately
+        viewModel.deleteScreenshot()
+        viewModel.deleteScreenshot() // no-op: _isDeleting already true
+        testDispatcher.scheduler.advanceUntilIdle()
+
+        // Repository should only be called once
+        verify(screenshotRepository, times(1)).deleteScreenshot(testScreenshotId)
+    }
+
+    @Test
+    fun `deleteScreenshot resets isDeleting even when repository throws`() = runTest {
+        val testScreenshotId = "test_screenshot_123"
+        whenever(screenshotRepository.getScreenshotById(testScreenshotId))
+            .thenReturn(createTestScreenshot(testScreenshotId))
+        whenever(screenshotRepository.deleteScreenshot(testScreenshotId))
+            .thenThrow(RuntimeException("DB error"))
+
+        viewModel = DetailViewModel(screenshotRepository, savedStateHandle)
+        testDispatcher.scheduler.advanceUntilIdle()
+
+        // ViewModel catches the exception internally — should not propagate
+        viewModel.deleteScreenshot()
+        testDispatcher.scheduler.advanceUntilIdle()
+
+        // isDeleting must be false regardless of the exception (finally block)
+        assertFalse(viewModel.isDeleting.value)
     }
 
     // Reference to ViewModel - created in each test
