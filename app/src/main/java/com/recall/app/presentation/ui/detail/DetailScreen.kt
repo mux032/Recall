@@ -132,12 +132,6 @@ fun DetailScreen(
                 )
             )
         },
-        modifier = Modifier.pointerInput(Unit) {
-            detectTapGestures(onTap = {
-                // This will be handled inside ExtractedTextSection if needed, 
-                // but we can also handle it here for global clicks.
-            })
-        }
     ) { paddingValues ->
         LazyColumn(
             modifier = Modifier
