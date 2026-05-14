@@ -68,6 +68,7 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
+import androidx.navigation.NavBackStackEntry
 import com.recall.app.domain.model.Screenshot
 import com.recall.app.domain.model.ScreenshotFilter
 import com.recall.app.presentation.ui.theme.Inter
@@ -107,9 +108,22 @@ fun HomeScreen(
     onSearchClick: (String) -> Unit,
     onScreenshotClick: (String) -> Unit,
     onSettingsClick: () -> Unit = {},
+    navBackStackEntry: NavBackStackEntry? = null,
     viewModel: HomeViewModel = hiltViewModel()
 ) {
     val screenshots by viewModel.screenshots.collectAsState()
+
+    // Refresh the screenshot list when we return from DetailScreen after a deletion
+    val screenshotDeleted = navBackStackEntry
+        ?.savedStateHandle
+        ?.getStateFlow("screenshot_deleted", false)
+        ?.collectAsState()
+    LaunchedEffect(screenshotDeleted?.value) {
+        if (screenshotDeleted?.value == true) {
+            viewModel.refresh()
+            navBackStackEntry?.savedStateHandle?.set("screenshot_deleted", false)
+        }
+    }
     val searchHistory by viewModel.searchHistory.collectAsState()
     val selectedFilter by viewModel.selectedFilter.collectAsState()
     val isLoadingMore by viewModel.isLoadingMore.collectAsState()

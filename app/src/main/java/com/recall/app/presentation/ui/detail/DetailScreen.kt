@@ -64,6 +64,7 @@ import androidx.compose.foundation.gestures.detectTapGestures
 @Composable
 fun DetailScreen(
     onNavigateBack: () -> Unit = {},
+    onScreenshotDeleted: () -> Unit = {},
     viewModel: DetailViewModel = hiltViewModel()
 ) {
     val screenshot by viewModel.screenshot.collectAsState()
@@ -73,11 +74,13 @@ fun DetailScreen(
     var showDeleteDialog by remember { mutableStateOf(false) }
     val context = LocalContext.current
 
-    // Collect one-shot navigation events (e.g. navigate back after deletion)
+    // Collect one-shot navigation events
     LaunchedEffect(Unit) {
         viewModel.navigationEvent.collect { event ->
             when (event) {
-                is DetailNavigationEvent.NavigateBack -> onNavigateBack()
+                // After deletion navigate via onScreenshotDeleted so the caller
+                // can signal HomeScreen to refresh before popping the back stack
+                is DetailNavigationEvent.NavigateBack -> onScreenshotDeleted()
             }
         }
     }
