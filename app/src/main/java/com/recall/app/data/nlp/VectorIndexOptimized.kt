@@ -56,11 +56,41 @@ class VectorIndexOptimized @Inject constructor(
         private const val DEFAULT_CACHE_SIZE = 50
         private const val SIMILARITY_THRESHOLD = 0.3f // Minimum similarity score to return results
         private const val PARALLEL_THRESHOLD = 100 // Use parallel search for >100 vectors
+
+        /**
+         * Default vector cache size used before [initializeCache] is called.
+         * Chosen conservatively so the index can hold a typical small library
+         * (~75 MB) without waiting for the async preference read.
+         */
+        private const val DEFAULT_VECTOR_CACHE_SIZE = 50_000
     }
 
-    // In-memory cache: ID -> FloatArray Embedding
-    // ConcurrentHashMap provides thread-safe access for vector storage
-    private val vectorCache = ConcurrentHashMap<String, FloatArray>()
+    /**
+     * Maximum number of embeddings to hold in RAM.
+     * Set from [MemoryInfoHelper.calculateOptimalCacheLimit] at construction time
+     * and updated when the user changes the cache-limit setting.
+     * Each embedding occupies ~1.5 KB (384 floats × 4 bytes).
+     */
+    @Volatile
+    private var vectorCacheLimit: Int = DEFAULT_VECTOR_CACHE_SIZE
+
+    /**
+     * LRU cache for embedding vectors: screenshot ID → FloatArray.
+     *
+     * Replaces the previous unbounded [ConcurrentHashMap] which kept every
+     * embedding in RAM permanently, leading to OOM on large libraries
+     * (100 K screenshots ≈ 150 MB, 500 K ≈ 750 MB).
+     *
+     * [LinkedHashMap] with `accessOrder = true` gives O(1) LRU eviction:
+     * the least-recently-used entry is always at the head of the iteration order
+     * and can be removed in O(1) when the cap is exceeded.
+     *
+     * All access is serialised through [vectorCacheLock].
+     */
+    private var vectorCache: LinkedHashMap<String, FloatArray> = createVectorCache(DEFAULT_VECTOR_CACHE_SIZE)
+
+    /** Guards all reads and writes to [vectorCache]. */
+    private val vectorCacheLock = ReentrantLock()
 
     // LRU cache for query results: QueryHash -> List of (ID, Score)
     // Issue #1 & #3 Fix: Use LinkedHashMap with accessOrder=true for O(1) LRU eviction
@@ -80,6 +110,13 @@ class VectorIndexOptimized @Inject constructor(
     private val searchCount = AtomicLong(0)
     private val cacheHitCount = AtomicLong(0)
     private val totalSearchTimeNanos = AtomicLong(0)
+
+    /**
+     * Create a new LRU LinkedHashMap for embedding vectors with the given cap.
+     * [accessOrder] = true means the map evicts the least-recently-accessed entry first.
+     */
+    private fun createVectorCache(size: Int): LinkedHashMap<String, FloatArray> =
+        LinkedHashMap(size, 0.75f, true)
 
     /**
      * Create a new LRU cache with the specified size.
@@ -108,16 +145,25 @@ class VectorIndexOptimized @Inject constructor(
      */
     fun initializeCache() {
         // Use runBlocking for initialization (called once at app startup)
-        val cacheSize = runBlocking {
+        val queryCacheSize = runBlocking {
             getEffectiveCacheLimit().coerceAtLeast(DEFAULT_CACHE_SIZE)
         }
-        
-        // Initialize cache with lock (ReentrantLock for non-suspend function)
+        val vectorCacheSize = memoryInfoHelper.calculateOptimalCacheLimit()
+            .coerceAtLeast(DEFAULT_VECTOR_CACHE_SIZE)
+
+        // Initialize query cache
         cacheLock.withLock {
-            queryCache = createQueryCache(cacheSize)
-            currentCacheLimit = cacheSize
+            queryCache = createQueryCache(queryCacheSize)
+            currentCacheLimit = queryCacheSize
         }
-        Log.i(TAG, "Cache initialized with size: $cacheSize (limit: $currentCacheLimit)")
+
+        // Initialize vector cache with LRU cap
+        vectorCacheLock.withLock {
+            vectorCache = createVectorCache(vectorCacheSize)
+            vectorCacheLimit = vectorCacheSize
+        }
+
+        Log.i(TAG, "Cache initialized — query: $queryCacheSize, vector: $vectorCacheSize")
     }
 
     /**
@@ -156,14 +202,14 @@ class VectorIndexOptimized @Inject constructor(
     }
 
     /**
-     * Loads a raw byte array blob into the index memory.
-     * Thread-safe for concurrent access.
+     * Loads a raw byte array blob into the LRU-capped vector cache.
+     * When the cache is at capacity the least-recently-accessed entry is evicted first.
+     * Thread-safe via [vectorCacheLock].
      */
     fun loadVector(id: String, blob: ByteArray?) {
         if (blob == null) return
-
         val floatArray = byteArrayToFloatArray(blob)
-        vectorCache[id] = floatArray
+        addToVectorCache(id, floatArray)
     }
 
     /**
@@ -173,28 +219,22 @@ class VectorIndexOptimized @Inject constructor(
     fun loadAll(data: Map<String, ByteArray?>) {
         val startTime = System.nanoTime()
 
-        // Clear existing data
-        vectorCache.clear()
-        
-        // Issue #1 Fix: Use lock for thread-safe cache clearing
-        cacheLock.withLock {
-            queryCache.clear()
-        }
+        // Clear existing data under both locks
+        vectorCacheLock.withLock { vectorCache.clear() }
+        cacheLock.withLock { queryCache.clear() }
 
         var loadedCount = 0
         data.forEach { (id, blob) ->
             if (blob != null) {
-                val floatArray = byteArrayToFloatArray(blob)
-                vectorCache[id] = floatArray
+                addToVectorCache(id, byteArrayToFloatArray(blob))
                 loadedCount++
             }
         }
 
         val loadTimeMs = (System.nanoTime() - startTime) / 1_000_000
-        // Only log if we have vectors (reduces noise in tests)
         if (loadedCount > 0) {
             Log.i(TAG, "Loaded $loadedCount vectors into optimized index in ${loadTimeMs}ms")
-            Log.i(TAG, "Vector index size: ${vectorCache.size}")
+            Log.i(TAG, "Vector index size: ${size()} (cap: $vectorCacheLimit)")
         }
     }
 
@@ -267,30 +307,27 @@ class VectorIndexOptimized @Inject constructor(
 
     /**
      * Sequential search for small datasets.
+     * Takes a snapshot of the vector cache under [vectorCacheLock] so the search
+     * runs on a stable copy without holding the lock during computation.
      */
     private fun sequentialSearch(queryVector: FloatArray, threshold: Float): List<Pair<String, Float>> {
-        return vectorCache
-            .mapNotNull { (id, vector) ->
-                val similarity = cosineSimilarity(queryVector, vector)
-                if (similarity >= threshold) id to similarity else null
-            }
+        val snapshot = vectorCacheLock.withLock { vectorCache.entries.toList() }
+        return snapshot.mapNotNull { (id, vector) ->
+            val similarity = cosineSimilarity(queryVector, vector)
+            if (similarity >= threshold) id to similarity else null
+        }
     }
 
     /**
      * Parallel search for large datasets using coroutines.
-     * Splits work across available CPU cores.
-     * 
-     * Issue #2 Fix: Uses coroutineScope instead of runBlocking
-     * - runBlocking blocks the calling thread, which is problematic in Android UI context
-     * - coroutineScope allows structured concurrency without blocking
-     * - Note: This method is now a suspend function, called from search() via runBlocking
-     *   (search() signature unchanged to maintain backward compatibility with non-suspend callers)
+     * Takes a snapshot of the vector cache under [vectorCacheLock] so the search
+     * runs on a stable copy without holding the lock during computation.
      */
     private suspend fun parallelSearch(queryVector: FloatArray, threshold: Float): List<Pair<String, Float>> {
+        val snapshot = vectorCacheLock.withLock { vectorCache.entries.toList() }
         return coroutineScope {
-            val entries = vectorCache.entries.toList()
-            val chunkSize = (entries.size / Runtime.getRuntime().availableProcessors()).coerceAtLeast(50)
-            val chunks = entries.chunked(chunkSize)
+            val chunkSize = (snapshot.size / Runtime.getRuntime().availableProcessors()).coerceAtLeast(50)
+            val chunks = snapshot.chunked(chunkSize)
 
             val deferredResults = chunks.map { chunk ->
                 async {
@@ -386,18 +423,16 @@ class VectorIndexOptimized @Inject constructor(
     }
 
     /**
-     * Get current index size.
+     * Get current number of embeddings held in the LRU vector cache.
      */
-    fun size(): Int = vectorCache.size
+    fun size(): Int = vectorCacheLock.withLock { vectorCache.size }
 
     /**
      * Clear all data from the index.
      */
     fun clear() {
-        vectorCache.clear()
-        cacheLock.withLock {
-            queryCache.clear()
-        }
+        vectorCacheLock.withLock { vectorCache.clear() }
+        cacheLock.withLock { queryCache.clear() }
         searchCount.set(0)
         cacheHitCount.set(0)
         totalSearchTimeNanos.set(0)
@@ -407,14 +442,15 @@ class VectorIndexOptimized @Inject constructor(
     /**
      * Check if index holds any data to prevent premature searching.
      */
-    fun isReady(): Boolean = vectorCache.isNotEmpty()
+    fun isReady(): Boolean = vectorCacheLock.withLock { vectorCache.isNotEmpty() }
 
     /**
      * Get metrics summary for debugging/monitoring.
      */
     fun getMetrics(): Map<String, Any> = mapOf(
         "index_size" to size(),
-        "cache_size" to queryCache.size,
+        "vector_cache_limit" to vectorCacheLimit,
+        "cache_size" to cacheLock.withLock { queryCache.size },
         "cache_limit" to currentCacheLimit,
         "search_count" to searchCount.get(),
         "cache_hits" to cacheHitCount.get(),
@@ -436,25 +472,58 @@ class VectorIndexOptimized @Inject constructor(
      */
     fun onMemoryPressureDetected() {
         if (memoryInfoHelper.isUnderMemoryPressure()) {
+            // Reduce query cache by 50%
             cacheLock.withLock {
                 val reducedLimit = (currentCacheLimit * 0.5).toInt().coerceAtLeast(1000)
                 val oldCache = queryCache
                 queryCache = createQueryCache(reducedLimit)
                 currentCacheLimit = reducedLimit
-                
-                // Preserve most recent entries using iterator-based approach
                 val entriesToSkip = oldCache.size - reducedLimit
                 var skipped = 0
                 for ((key, value) in oldCache) {
-                    if (skipped++ >= entriesToSkip) {
-                        queryCache[key] = value
-                    }
+                    if (skipped++ >= entriesToSkip) queryCache[key] = value
                 }
-                
-                Log.i(TAG, "Cache reduced due to memory pressure: $reducedLimit (was: ${oldCache.size})")
+                Log.i(TAG, "Query cache reduced due to memory pressure: $reducedLimit")
+            }
+
+            // Reduce vector cache by 50% — evict LRU embeddings first
+            vectorCacheLock.withLock {
+                val reducedLimit = (vectorCacheLimit * 0.5).toInt().coerceAtLeast(1000)
+                val oldVectorCache = vectorCache
+                vectorCache = createVectorCache(reducedLimit)
+                vectorCacheLimit = reducedLimit
+                val entriesToSkip = oldVectorCache.size - reducedLimit
+                var skipped = 0
+                for ((key, value) in oldVectorCache) {
+                    if (skipped++ >= entriesToSkip) vectorCache[key] = value
+                }
+                Log.i(TAG, "Vector cache reduced due to memory pressure: $reducedLimit")
             }
         }
     }
+
+    /**
+     * Insert [id] → [floatArray] into the LRU vector cache.
+     * If the cache is at [vectorCacheLimit], the least-recently-accessed entry is evicted first.
+     * Must be called under [vectorCacheLock] or via this helper (which acquires the lock).
+     */
+    private fun addToVectorCache(id: String, floatArray: FloatArray) {
+        vectorCacheLock.withLock {
+            if (vectorCache.size >= vectorCacheLimit) {
+                val iterator = vectorCache.entries.iterator()
+                if (iterator.hasNext()) {
+                    iterator.next()
+                    iterator.remove() // O(1) LRU eviction
+                }
+            }
+            vectorCache[id] = floatArray
+        }
+    }
+
+    /**
+     * Get the current vector cache limit (for debugging/testing).
+     */
+    fun getVectorCacheLimit(): Int = vectorCacheLimit
 
     /**
      * Generate a unique cache key from a query vector using SHA-256.

@@ -159,4 +159,73 @@ class VectorIndexOptimizedTest {
         assertEquals(0L, metrics["search_count"])
         assertEquals(0L, metrics["cache_hits"])
     }
+
+    // -----------------------------------------------------------------------
+    // LRU vector cache cap tests (#15)
+    // -----------------------------------------------------------------------
+
+    @Test
+    fun `vector cache does not exceed cap when loadVector called beyond limit`() {
+        // Set a small cap directly via reflection for testing
+        val capField = VectorIndexOptimized::class.java.getDeclaredField("vectorCacheLimit")
+        capField.isAccessible = true
+        capField.setInt(vectorIndex, 3)
+
+        // Load 5 vectors — only 3 should be retained
+        for (i in 1..5) {
+            val blob = floatArrayToByteArray(floatArrayOf(i.toFloat(), 0.0f, 0.0f))
+            vectorIndex.loadVector("id_$i", blob)
+        }
+
+        assertTrue(
+            "Vector cache size ${vectorIndex.size()} exceeds cap of 3",
+            vectorIndex.size() <= 3
+        )
+    }
+
+    @Test
+    fun `loadAll respects vector cache cap`() {
+        val capField = VectorIndexOptimized::class.java.getDeclaredField("vectorCacheLimit")
+        capField.isAccessible = true
+        capField.setInt(vectorIndex, 2)
+
+        val data = (1..5).associate { "id_$it" to floatArrayToByteArray(floatArrayOf(it.toFloat(), 0f, 0f)) }
+        vectorIndex.loadAll(data)
+
+        assertTrue(
+            "loadAll should cap vector cache at 2, got ${vectorIndex.size()}",
+            vectorIndex.size() <= 2
+        )
+    }
+
+    @Test
+    fun `vector cache cap is set from calculateOptimalCacheLimit on initializeCache`() {
+        // After initializeCache(), vectorCacheLimit should be >= DEFAULT_VECTOR_CACHE_SIZE (50_000)
+        assertTrue(
+            "vectorCacheLimit should be >= 50_000 after initializeCache, got ${vectorIndex.getVectorCacheLimit()}",
+            vectorIndex.getVectorCacheLimit() >= 50_000
+        )
+    }
+
+    @Test
+    fun `search still works correctly after LRU eviction`() {
+        val capField = VectorIndexOptimized::class.java.getDeclaredField("vectorCacheLimit")
+        capField.isAccessible = true
+        capField.setInt(vectorIndex, 2)
+
+        // Load 3 vectors into a cap-2 cache — first one gets evicted
+        val vec1 = floatArrayToByteArray(floatArrayOf(1.0f, 0.0f, 0.0f))
+        val vec2 = floatArrayToByteArray(floatArrayOf(0.0f, 1.0f, 0.0f))
+        val vec3 = floatArrayToByteArray(floatArrayOf(0.0f, 0.0f, 1.0f))
+        vectorIndex.loadVector("v1", vec1)
+        vectorIndex.loadVector("v2", vec2)
+        vectorIndex.loadVector("v3", vec3) // v1 should be evicted
+
+        assertEquals(2, vectorIndex.size())
+        assertTrue(vectorIndex.isReady())
+
+        // Search should work on the 2 remaining vectors
+        val results = vectorIndex.search(floatArrayOf(0.0f, 1.0f, 0.0f), limit = 5, threshold = 0.0f)
+        assertTrue(results.isNotEmpty())
+    }
 }
