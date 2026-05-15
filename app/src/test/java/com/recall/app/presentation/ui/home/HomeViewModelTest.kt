@@ -304,6 +304,73 @@ class HomeViewModelTest {
     }
 
     // -----------------------------------------------------------------------
+    // timelineSections
+    // -----------------------------------------------------------------------
+
+    @Test
+    fun `timelineSections initial value is empty list`() = runTest {
+        whenever(screenshotRepository.getScreenshotPage(any(), any())).thenReturn(emptyList())
+        viewModel = buildViewModel()
+        // Before any collector activates WhileSubscribed, initial value is empty
+        assertEquals(emptyList<TimelineSection>(), viewModel.timelineSections.value)
+    }
+
+    @Test
+    fun `timelineSections emits sections grouped from screenshots`() = runTest {
+        val now = System.currentTimeMillis()
+        val page = listOf(
+            buildScreenshot("today", dateCreated = now - 1 * 3_600_000L),    // 1h ago → Today
+            buildScreenshot("lastweek", dateCreated = now - 10 * 86_400_000L) // 10d ago → Last Week
+        )
+        whenever(screenshotRepository.getScreenshotPage(any(), any())).thenReturn(page)
+        viewModel = buildViewModel()
+
+        val sectionsCollected = mutableListOf<List<TimelineSection>>()
+        backgroundScope.launch { viewModel.timelineSections.collect { sectionsCollected.add(it) } }
+        advanceUntilIdle()
+
+        val sections = sectionsCollected.last()
+        assertEquals(2, sections.size)
+        assertEquals("Today", sections[0].label)
+        assertEquals(1, sections[0].screenshots.size)
+        assertEquals("Last Week", sections[1].label)
+        assertEquals(1, sections[1].screenshots.size)
+    }
+
+    @Test
+    fun `timelineSections emits single Today section when all screenshots are recent`() = runTest {
+        val now = System.currentTimeMillis()
+        val page = listOf(
+            buildScreenshot("a", dateCreated = now - 1 * 3_600_000L),
+            buildScreenshot("b", dateCreated = now - 2 * 3_600_000L),
+            buildScreenshot("c", dateCreated = now - 3 * 3_600_000L)
+        )
+        whenever(screenshotRepository.getScreenshotPage(any(), any())).thenReturn(page)
+        viewModel = buildViewModel()
+
+        val sectionsCollected = mutableListOf<List<TimelineSection>>()
+        backgroundScope.launch { viewModel.timelineSections.collect { sectionsCollected.add(it) } }
+        advanceUntilIdle()
+
+        val sections = sectionsCollected.last()
+        assertEquals(1, sections.size)
+        assertEquals("Today", sections[0].label)
+        assertEquals(3, sections[0].screenshots.size)
+    }
+
+    @Test
+    fun `timelineSections emits empty list when no screenshots loaded`() = runTest {
+        whenever(screenshotRepository.getScreenshotPage(any(), any())).thenReturn(emptyList())
+        viewModel = buildViewModel()
+
+        val sectionsCollected = mutableListOf<List<TimelineSection>>()
+        backgroundScope.launch { viewModel.timelineSections.collect { sectionsCollected.add(it) } }
+        advanceUntilIdle()
+
+        assertTrue(sectionsCollected.last().isEmpty())
+    }
+
+    // -----------------------------------------------------------------------
     // Helpers
     // -----------------------------------------------------------------------
 
