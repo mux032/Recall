@@ -3,8 +3,10 @@ package com.recall.app.domain.usecase
 import com.recall.app.data.nlp.VectorIndexOptimized
 import com.recall.app.domain.model.Screenshot
 import com.recall.app.domain.repository.ScreenshotRepository
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -241,5 +243,59 @@ class SearchScreenshotsUseCaseTest {
         assertEquals("ai_id10", results[9].id)
         // FTS is still called (async starts eagerly) but results are ignored
         verify(screenshotRepository).searchFts(query)
+    }
+
+    // -----------------------------------------------------------------------
+    // #21 — AI_SEARCH_TIMEOUT_MS fix
+    // -----------------------------------------------------------------------
+
+    @Test
+    fun `AI_SEARCH_TIMEOUT_MS is 1500ms`() {
+        assertEquals(
+            "AI_SEARCH_TIMEOUT_MS must be 1500ms per TRD (P95 < 2000ms)",
+            1500L,
+            SearchScreenshotsUseCase.AI_SEARCH_TIMEOUT_MS
+        )
+    }
+
+    /**
+     * Verifies that a 400ms embedding delay (typical ONNX cold-start) does NOT cause
+     * the AI path to time out within the 1500ms window.
+     *
+     * Uses a hand-rolled stub instead of Mockito because Mockito's doAnswer does not
+     * support Kotlin suspend function continuations.
+     */
+    @Test
+    fun `embedding generator with 400ms delay still returns AI results within 1500ms timeout`() = runTest {
+        val query = "cold start test"
+        val queryVector = floatArrayOf(1.0f, 0.0f)
+
+        // Hand-rolled stub: delays 400ms then returns the vector
+        val slowEmbeddingGenerator = object : EmbeddingGenerator {
+            override suspend fun generate(text: String): FloatArray? {
+                delay(400)
+                return queryVector
+            }
+            override fun close() = Unit
+        }
+
+        val aiScreenshot = Screenshot(
+            id = "ai_slow", filePath = "/sdcard/ai_slow.png", fileName = "ai_slow.png",
+            dateCreated = 0L, dateIndexed = 0L, width = 1080, height = 1920
+        )
+        whenever(vectorIndex.isReady()).thenReturn(true)
+        whenever(vectorIndex.search(queryVector, 10, 0.3f))
+            .thenReturn(listOf(Pair("ai_slow", 0.85f)))
+        whenever(screenshotRepository.getScreenshotsByIds(listOf("ai_slow")))
+            .thenReturn(listOf(aiScreenshot))
+        whenever(screenshotRepository.searchFts(query)).thenReturn(emptyList())
+
+        // Build use case with the slow stub
+        val slowUseCase = SearchScreenshotsUseCase(slowEmbeddingGenerator, vectorIndex, screenshotRepository)
+        val results = slowUseCase.execute(query, 10)
+
+        // AI result must be present — 400ms delay is within the 1500ms timeout
+        assertTrue("Expected AI result but got empty — 400ms delay should not time out at 1500ms", results.isNotEmpty())
+        assertEquals("ai_slow", results[0].id)
     }
 }
