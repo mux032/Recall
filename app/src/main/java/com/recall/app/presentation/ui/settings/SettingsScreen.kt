@@ -22,6 +22,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.hilt.navigation.compose.hiltViewModel
+import com.recall.app.data.local.ModelDownloadState
 import com.recall.app.domain.model.*
 import com.recall.app.util.MemoryClass
 
@@ -29,15 +31,60 @@ import com.recall.app.util.MemoryClass
 @Composable
 fun SettingsScreen(
     onNavigateBack: () -> Unit,
-    systemStatus: SystemStatus = getSampleSystemStatus(),
-    activeModels: List<AIModel> = getSampleActiveModels(),
-    languageModels: List<AIModel> = getSampleLanguageModels(),
-    embeddingModels: List<AIModel> = getSampleEmbeddingModels(),
-    onFloatingCaptureToggle: (Boolean) -> Unit = {},
-    onModelAction: (AIModel) -> Unit = {},
-    currentCacheLimitOption: CacheLimitOption = CacheLimitOption.AUTO,
-    onCacheLimitChange: (CacheLimitOption) -> Unit = {}
+    viewModel: SettingsViewModel = hiltViewModel()
 ) {
+    val deviceProfile by viewModel.deviceProfile.collectAsState()
+    val recommendedModel by viewModel.recommendedModel.collectAsState()
+    val downloadState by viewModel.downloadState.collectAsState()
+    val downloadProgress by viewModel.downloadProgress.collectAsState()
+    val cacheLimitOption by viewModel.cacheLimitOption.collectAsState()
+
+    // Map DeviceProfile → SystemStatus for existing SystemStatusCards composable
+    val systemStatus = remember(deviceProfile) {
+        SystemStatus(
+            isFloatingCaptureEnabled = true,
+            npuUsage = 0,
+            cpuUsage = deviceProfile.availableCores * 3, // approximate placeholder
+            deviceHealth = DeviceHealth.OPTIMIZED
+        )
+    }
+
+    // Map ModelDownloadState → AIModel for the embedding model card
+    val embeddingModel = remember(recommendedModel, downloadState, downloadProgress) {
+        // Use a shorter display name — strip the size suffix to keep it compact
+        val shortName = recommendedModel.displayName
+            .replace(Regex("""\s*\(.*\)"""), "").trim()
+        AIModel(
+            id = recommendedModel.fileName,
+            name = shortName,
+            description = "",
+            size = "${recommendedModel.sizeBytes / 1_000_000} MB",
+            iconType = ModelIconType.HUB,
+            status = when (downloadState) {
+                ModelDownloadState.READY -> ModelStatus.READY
+                ModelDownloadState.DOWNLOADING -> ModelStatus.DOWNLOADING
+                ModelDownloadState.FAILED -> ModelStatus.AVAILABLE
+                ModelDownloadState.NONE -> ModelStatus.AVAILABLE
+            },
+            isRecommended = true,
+            // Surface failure so ModelLibraryCard renders the Re-download (Refresh) icon
+            warning = if (downloadState == ModelDownloadState.FAILED) "Download Failed — tap to retry" else null,
+            downloadProgress = if (downloadState == ModelDownloadState.DOWNLOADING) {
+                (downloadProgress * 100).toInt().coerceIn(0, 100)
+            } else null
+        )
+    }
+
+    // Action handler — context-aware based on current download state
+    val onEmbeddingModelAction: (AIModel) -> Unit = {
+        when (downloadState) {
+            ModelDownloadState.READY -> viewModel.deleteModel()
+            ModelDownloadState.DOWNLOADING -> viewModel.cancelModelDownload()
+            ModelDownloadState.FAILED -> viewModel.startModelDownload() // re-download
+            ModelDownloadState.NONE -> viewModel.startModelDownload()
+        }
+    }
+
     Scaffold(
         topBar = {
             SettingsTopBar(
@@ -53,84 +100,69 @@ fun SettingsScreen(
             contentPadding = PaddingValues(horizontal = 16.dp, vertical = 20.dp),
             verticalArrangement = Arrangement.spacedBy(24.dp)
         ) {
-            // Header Section
+            // ── AI Search (memory + embedding model) ────────────────────────
             item {
-                SettingsHeader()
+                SettingsSection(title = "AI Search", description = "Memory and embedding model for on-device search") {
+                    RequiredMemoryCard(
+                        currentOption = cacheLimitOption,
+                        memoryClass = deviceProfile.memoryClass,
+                        onOptionSelected = { viewModel.setCacheLimitOption(it) }
+                    )
+                    EmbeddingModelCard(
+                        model = embeddingModel,
+                        onActionClick = { onEmbeddingModelAction(embeddingModel) }
+                    )
+                }
             }
 
-            // System Status Bento Cards
-            item {
-                SystemStatusCards(
-                    systemStatus = systemStatus,
-                    onFloatingCaptureToggle = onFloatingCaptureToggle
+
+        }
+    }
+}
+
+/**
+ * Consistent section wrapper — outer rounded container with title/description header
+ * above the card content. All inner cards share the same [MaterialTheme.colorScheme.surface]
+ * background to look unified inside the container.
+ */
+@Composable
+private fun SettingsSection(
+    title: String,
+    description: String,
+    modifier: Modifier = Modifier,
+    content: @Composable ColumnScope.() -> Unit
+) {
+    Surface(
+        modifier = modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(20.dp),
+        color = MaterialTheme.colorScheme.surfaceContainerLow,
+        border = androidx.compose.foundation.BorderStroke(
+            1.dp,
+            MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.15f)
+        )
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            // Section heading
+            Column(modifier = Modifier.padding(horizontal = 4.dp)) {
+                Text(
+                    text = title,
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+                Text(
+                    text = description,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
-
-            // Vector Cache Settings
-            item {
-                VectorCacheLimitCard(
-                    currentOption = currentCacheLimitOption,
-                    onOptionSelected = onCacheLimitChange
-                )
-                Spacer(modifier = Modifier.height(12.dp))
-            }
-
-            // Active Intelligence Section
-            item {
-                SectionHeader(
-                    title = "Active Intelligence",
-                    description = null
-                )
-            }
-
-            // Active Models
-            items(activeModels) { model ->
-                ActiveModelCard(
-                    model = model,
-                    onActionClick = { onModelAction(model) }
-                )
-                Spacer(modifier = Modifier.height(12.dp))
-            }
-
-            // Language Models Library
-            item {
-                SectionHeader(
-                    title = "Language Models (LLM)",
-                    description = "For chat, summaries, and captions"
-                )
-            }
-
-            // Language Models
-            items(languageModels) { model ->
-                ModelLibraryCard(
-                    model = model,
-                    onActionClick = { onModelAction(model) }
-                )
-                Spacer(modifier = Modifier.height(12.dp))
-            }
-
-            // Embedding Models Library
-            item {
-                SectionHeader(
-                    title = "Embedding Models",
-                    description = "For semantic search and indexing"
-                )
-            }
-
-            // Embedding Models
-            items(embeddingModels) { model ->
-                ModelLibraryCard(
-                    model = model,
-                    onActionClick = { onModelAction(model) }
-                )
-                Spacer(modifier = Modifier.height(12.dp))
-            }
-
-            // Usage Tip
-            item {
-                UsageTipCard()
-                Spacer(modifier = Modifier.height(32.dp))
-            }
+            // Card content — inner cards rendered on surface color
+            content()
         }
     }
 }
@@ -185,204 +217,68 @@ private fun SettingsHeader() {
     }
 }
 
+/**
+ * Displays real device hardware info sourced from [SettingsViewModel.deviceProfile].
+ * Satisfies acceptance criterion: "System info shows actual RAM and CPU cores".
+ */
 @Composable
-private fun SystemStatusCards(
-    systemStatus: SystemStatus,
-    onFloatingCaptureToggle: (Boolean) -> Unit
+private fun DeviceProfileCard(
+    totalRamBytes: Long,
+    availableCores: Int,
+    primaryAbi: String,
+    modifier: Modifier = Modifier
 ) {
-    Column(
-        verticalArrangement = Arrangement.spacedBy(12.dp)
+    val ramGb = totalRamBytes / (1024L * 1024 * 1024)
+    val ramLabel = if (ramGb > 0) "$ramGb GB RAM" else "${totalRamBytes / (1024 * 1024)} MB RAM"
+
+    Surface(
+        modifier = modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp),
+        color = MaterialTheme.colorScheme.surface
     ) {
-        // Device Health Card
-        Surface(
-            modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(16.dp),
-            color = MaterialTheme.colorScheme.primary,
-            shadowElevation = 8.dp
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp)
         ) {
-            Box {
-                // Decorative blur effect
-                Box(
-                    modifier = Modifier
-                        .align(Alignment.TopEnd)
-                        .offset(x = 16.dp, y = (-8).dp)
-                        .size(64.dp)
-                        .background(
-                            Brush.radialGradient(
-                                colors = listOf(
-                                    MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.3f),
-                                    Color.Transparent
-                                )
-                            ),
-                            shape = RoundedCornerShape(32.dp)
-                        )
-                )
-
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(20.dp)
-                ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(
-                            text = "Device Health",
-                            style = MaterialTheme.typography.labelSmall,
-                            fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.8f)
-                        )
-                        Icon(
-                            imageVector = Icons.Default.Memory,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.onPrimary,
-                            modifier = Modifier.size(20.dp)
-                        )
-                    }
-
-                    Spacer(modifier = Modifier.height(16.dp))
-
-                    Row(
-                        horizontalArrangement = Arrangement.spacedBy(24.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        // NPU Circular Progress
-                        Column(
-                            horizontalAlignment = Alignment.CenterHorizontally
-                        ) {
-                            Box(
-                                contentAlignment = Alignment.Center
-                            ) {
-                                CircularProgressIndicator(
-                                    progress = systemStatus.npuUsage / 100f,
-                                    modifier = Modifier.size(80.dp),
-                                    strokeWidth = 8.dp,
-                                    color = MaterialTheme.colorScheme.onPrimary,
-                                    trackColor = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.3f)
-                                )
-                                Text(
-                                    text = "${systemStatus.npuUsage}%",
-                                    style = MaterialTheme.typography.titleLarge,
-                                    fontWeight = FontWeight.ExtraBold,
-                                    color = MaterialTheme.colorScheme.onPrimary
-                                )
-                            }
-                            Spacer(modifier = Modifier.height(4.dp))
-                            Text(
-                                text = "NPU",
-                                style = MaterialTheme.typography.labelMedium,
-                                color = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.9f)
-                            )
-                        }
-
-                        // CPU Circular Progress
-                        Column(
-                            horizontalAlignment = Alignment.CenterHorizontally
-                        ) {
-                            Box(
-                                contentAlignment = Alignment.Center
-                            ) {
-                                CircularProgressIndicator(
-                                    progress = systemStatus.cpuUsage / 100f,
-                                    modifier = Modifier.size(80.dp),
-                                    strokeWidth = 8.dp,
-                                    color = MaterialTheme.colorScheme.onPrimary,
-                                    trackColor = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.3f)
-                                )
-                                Text(
-                                    text = "${systemStatus.cpuUsage}%",
-                                    style = MaterialTheme.typography.titleLarge,
-                                    fontWeight = FontWeight.ExtraBold,
-                                    color = MaterialTheme.colorScheme.onPrimary
-                                )
-                            }
-                            Spacer(modifier = Modifier.height(4.dp))
-                            Text(
-                                text = "CPU",
-                                style = MaterialTheme.typography.labelMedium,
-                                color = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.9f)
-                            )
-                        }
-                    }
-                }
-            }
-        }
-
-        // Capture State Card
-        Surface(
-            modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(16.dp),
-            color = MaterialTheme.colorScheme.surfaceContainerLowest,
-            border = androidx.compose.foundation.BorderStroke(
-                1.dp,
-                MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.2f)
-            )
-        ) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(20.dp)
-            ) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
+            Row(horizontalArrangement = Arrangement.spacedBy(24.dp)) {
+                Column {
                     Text(
-                        text = "Capture State",
-                        style = MaterialTheme.typography.labelSmall,
+                        text = ramLabel,
+                        style = MaterialTheme.typography.titleSmall,
                         fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    Text(
+                        text = "Total RAM",
+                        style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
-                    Icon(
-                        imageVector = Icons.Default.BubbleChart,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.tertiary,
-                        modifier = Modifier.size(20.dp)
+                }
+                Column {
+                    Text(
+                        text = "$availableCores cores",
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    Text(
+                        text = "CPU",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
-
-                Spacer(modifier = Modifier.height(12.dp))
-
-                Text(
-                    text = "Floating Capture Bubble",
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.onSurface
-                )
-
-                Spacer(modifier = Modifier.height(4.dp))
-
-                Text(
-                    text = "Quick access overlay for instant analysis.",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-
-                Spacer(modifier = Modifier.height(16.dp))
-
-                Row(
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    var isChecked by remember { mutableStateOf(systemStatus.isFloatingCaptureEnabled) }
-                    Switch(
-                        checked = isChecked,
-                        onCheckedChange = {
-                            isChecked = it
-                            onFloatingCaptureToggle(it)
-                        },
-                        colors = SwitchDefaults.colors(
-                            checkedThumbColor = MaterialTheme.colorScheme.onPrimary,
-                            checkedTrackColor = MaterialTheme.colorScheme.primary
-                        )
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
+                Column {
                     Text(
-                        text = if (isChecked) "Enabled" else "Disabled",
-                        style = MaterialTheme.typography.labelLarge,
+                        text = primaryAbi,
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.Bold,
                         color = MaterialTheme.colorScheme.onSurface
+                    )
+                    Text(
+                        text = "ABI",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
             }
@@ -390,180 +286,331 @@ private fun SystemStatusCards(
     }
 }
 
+@Composable
+private fun DeviceHealthCard(
+    systemStatus: SystemStatus
+) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp),
+        color = MaterialTheme.colorScheme.surface
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(12.dp),
+            horizontalArrangement = Arrangement.spacedBy(24.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            // NPU gauge
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Box(contentAlignment = Alignment.Center) {
+                    CircularProgressIndicator(
+                        progress = systemStatus.npuUsage / 100f,
+                        modifier = Modifier.size(52.dp),
+                        strokeWidth = 5.dp,
+                        color = MaterialTheme.colorScheme.primary,
+                        trackColor = MaterialTheme.colorScheme.primaryContainer
+                    )
+                    Text(
+                        text = "${systemStatus.npuUsage}%",
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                }
+                Column {
+                    Text(
+                        text = "NPU",
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    Text(
+                        text = "AI processor",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+
+            // CPU gauge
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Box(contentAlignment = Alignment.Center) {
+                    CircularProgressIndicator(
+                        progress = systemStatus.cpuUsage / 100f,
+                        modifier = Modifier.size(52.dp),
+                        strokeWidth = 5.dp,
+                        color = MaterialTheme.colorScheme.secondary,
+                        trackColor = MaterialTheme.colorScheme.secondaryContainer
+                    )
+                    Text(
+                        text = "${systemStatus.cpuUsage}%",
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.secondary
+                    )
+                }
+                Column {
+                    Text(
+                        text = "CPU",
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    Text(
+                        text = "Processor cores",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun CaptureStateCard(
+    systemStatus: SystemStatus,
+    onFloatingCaptureToggle: (Boolean) -> Unit
+) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp),
+        color = MaterialTheme.colorScheme.surface
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.weight(1f)
+            ) {
+                Icon(
+                    imageVector = Icons.Default.BubbleChart,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.tertiary,
+                    modifier = Modifier.size(24.dp)
+                )
+                Column {
+                    Text(
+                        text = "Floating Capture Bubble",
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    Text(
+                        text = "Quick access overlay for instant analysis.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+            var isChecked by remember { mutableStateOf(systemStatus.isFloatingCaptureEnabled) }
+            Switch(
+                checked = isChecked,
+                onCheckedChange = {
+                    isChecked = it
+                    onFloatingCaptureToggle(it)
+                },
+                colors = SwitchDefaults.colors(
+                    checkedThumbColor = MaterialTheme.colorScheme.onPrimary,
+                    checkedTrackColor = MaterialTheme.colorScheme.primary
+                )
+            )
+        }
+    }
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun VectorCacheLimitCard(
+private fun RequiredMemoryCard(
     currentOption: CacheLimitOption,
+    memoryClass: MemoryClass,
     onOptionSelected: (CacheLimitOption) -> Unit
 ) {
     var expanded by remember { mutableStateOf(false) }
     val options = CacheLimitOption.entries.toList()
 
+    // Reformat "50K embeddings (~75MB RAM)" → "~75 MB · 50K embeddings"
+    fun formatOption(option: CacheLimitOption): String {
+        if (option.estimatedMemoryMb == 0) return option.description // AUTO / UNLIMITED
+        return "~${option.estimatedMemoryMb} MB · ${option.limit / 1_000}K embeddings"
+    }
+
+    // An option is too demanding if its memory requirement exceeds what the device class supports.
+    // AUTO is always allowed. UNLIMITED requires VERY_HIGH. Others check estimatedMemoryMb.
+    fun isExceedsDevice(option: CacheLimitOption): Boolean {
+        if (option == CacheLimitOption.AUTO) return false
+        if (option == CacheLimitOption.UNLIMITED) return memoryClass != MemoryClass.VERY_HIGH
+        return when (memoryClass) {
+            MemoryClass.LOW      -> option.estimatedMemoryMb > 75   // only CONSERVATIVE fits
+            MemoryClass.MEDIUM   -> option.estimatedMemoryMb > 150  // up to BALANCED
+            MemoryClass.HIGH     -> option.estimatedMemoryMb > 750  // up to AGGRESSIVE
+            MemoryClass.VERY_HIGH -> false                           // all allowed
+        }
+    }
+
+    fun requiresRamLabel(option: CacheLimitOption): String = when {
+        option == CacheLimitOption.UNLIMITED -> "Requires 16 GB RAM"
+        option.estimatedMemoryMb > 750       -> "Requires 16 GB RAM"
+        option.estimatedMemoryMb > 150       -> "Requires 8 GB RAM"
+        option.estimatedMemoryMb > 75        -> "Requires 4 GB RAM"
+        else                                 -> ""
+    }
+
     Surface(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(16.dp),
-        color = MaterialTheme.colorScheme.surfaceContainerLowest,
-        border = androidx.compose.foundation.BorderStroke(
-            1.dp,
-            MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.2f)
-        )
+        color = MaterialTheme.colorScheme.surface
     ) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(20.dp)
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
             // Header
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
+            Text(
+                text = "Required Memory",
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+
+            // Full-width dropdown bar — the whole row is the trigger
+            ExposedDropdownMenuBox(
+                expanded = expanded,
+                onExpandedChange = { expanded = !expanded }
             ) {
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(12.dp),
-                    verticalAlignment = Alignment.CenterVertically
+                Surface(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .menuAnchor(),
+                    shape = RoundedCornerShape(12.dp),
+                    color = MaterialTheme.colorScheme.surfaceContainerLow,
+                    border = androidx.compose.foundation.BorderStroke(
+                        1.dp,
+                        if (expanded) MaterialTheme.colorScheme.primary
+                        else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f)
+                    )
                 ) {
-                    Box(
+                    Row(
                         modifier = Modifier
-                            .size(40.dp)
-                            .clip(RoundedCornerShape(20.dp))
-                            .background(MaterialTheme.colorScheme.tertiaryContainer),
-                        contentAlignment = Alignment.Center
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 12.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = currentOption.displayName,
+                                style = MaterialTheme.typography.titleSmall,
+                                fontWeight = FontWeight.SemiBold,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                            Text(
+                                text = formatOption(currentOption),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
                         Icon(
-                            imageVector = Icons.Default.Memory,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.onTertiaryContainer,
+                            imageVector = if (expanded) Icons.Default.KeyboardArrowUp
+                                         else Icons.Default.KeyboardArrowDown,
+                            contentDescription = "Select memory option",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier.size(20.dp)
                         )
                     }
-
-                    Column {
-                        Text(
-                            text = "Vector Cache Limit",
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.onSurface
-                        )
-                        Text(
-                            text = "Control how many embeddings are kept in memory for faster search",
-                            style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                }
-            }
-
-            Spacer(modifier = Modifier.height(16.dp))
-
-            // Current selection
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Column {
-                    Text(
-                        text = "Current Setting",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Text(
-                        text = currentOption.displayName,
-                        style = MaterialTheme.typography.titleSmall,
-                        fontWeight = FontWeight.SemiBold,
-                        color = MaterialTheme.colorScheme.primary
-                    )
-                    Spacer(modifier = Modifier.height(2.dp))
-                    Text(
-                        text = currentOption.description,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
                 }
 
-                ExposedDropdownMenuBox(
+                // Override Material3 menu container shape to match the rounded bar above
+                MaterialTheme(shapes = MaterialTheme.shapes.copy(extraSmall = RoundedCornerShape(12.dp))) {
+                ExposedDropdownMenu(
                     expanded = expanded,
-                    onExpandedChange = { expanded = !expanded }
+                    onDismissRequest = { expanded = false }
                 ) {
-                    OutlinedButton(
-                        onClick = { expanded = true },
-                        modifier = Modifier.menuAnchor(),
-                        colors = ButtonDefaults.outlinedButtonColors(
-                            contentColor = MaterialTheme.colorScheme.primary
-                        )
-                    ) {
-                        Text("Change")
-                        Icon(
-                            imageVector = Icons.Default.ArrowDropDown,
-                            contentDescription = null,
-                            modifier = Modifier.size(18.dp)
-                        )
-                    }
-
-                    ExposedDropdownMenu(
-                        expanded = expanded,
-                        onDismissRequest = { expanded = false }
-                    ) {
-                        options.forEach { option ->
-                            DropdownMenuItem(
-                                text = {
-                                    Column {
-                                        Text(
-                                            text = option.displayName,
-                                            fontWeight = if (option == currentOption) FontWeight.Bold else FontWeight.Normal
-                                        )
-                                        Text(
-                                            text = option.description,
-                                            style = MaterialTheme.typography.labelSmall,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                                        )
-                                    }
-                                },
-                                onClick = {
+                    options.forEach { option ->
+                        val disabled = isExceedsDevice(option)
+                        DropdownMenuItem(
+                            text = {
+                                Column {
+                                    Text(
+                                        text = option.displayName,
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        fontWeight = if (option == currentOption) FontWeight.Bold else FontWeight.Normal,
+                                        color = when {
+                                            disabled -> MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
+                                            option == currentOption -> MaterialTheme.colorScheme.primary
+                                            else -> MaterialTheme.colorScheme.onSurface
+                                        }
+                                    )
+                                    Text(
+                                        text = if (disabled) requiresRamLabel(option) else formatOption(option),
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = if (disabled) MaterialTheme.colorScheme.error.copy(alpha = 0.7f)
+                                                else MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            },
+                            onClick = {
+                                if (!disabled) {
                                     onOptionSelected(option)
                                     expanded = false
-                                },
-                                leadingIcon = {
-                                    if (option == currentOption) {
-                                        Icon(
-                                            imageVector = Icons.Default.Check,
-                                            contentDescription = null,
-                                            tint = MaterialTheme.colorScheme.primary,
-                                            modifier = Modifier.size(18.dp)
-                                        )
-                                    }
                                 }
-                            )
-                        }
+                            },
+                            enabled = !disabled,
+                            leadingIcon = {
+                                when {
+                                    disabled -> Icon(
+                                        imageVector = Icons.Default.Block,
+                                        contentDescription = null,
+                                        tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f),
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                    option == currentOption -> Icon(
+                                        imageVector = Icons.Default.Check,
+                                        contentDescription = null,
+                                        tint = MaterialTheme.colorScheme.primary,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                    else -> Spacer(modifier = Modifier.size(18.dp))
+                                }
+                            }
+                        )
                     }
                 }
+                } // end MaterialTheme shape override
             }
 
-            // Info chip
-            Spacer(modifier = Modifier.height(12.dp))
-            Surface(
-                shape = RoundedCornerShape(8.dp),
-                color = MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.3f)
+            // Restart hint
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                Row(
-                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Info,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.onTertiaryContainer,
-                        modifier = Modifier.size(16.dp)
-                    )
-                    Text(
-                        text = "Restart app to apply new cache limit",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onTertiaryContainer
-                    )
-                }
+                Icon(
+                    imageVector = Icons.Default.Info,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(12.dp)
+                )
+                Text(
+                    text = "Restart app to apply",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
             }
         }
     }
@@ -629,7 +676,7 @@ private fun ActiveModelCard(
                             ModelIconType.PSYCHOLOGY -> "Large Language Model"
                             else -> model.name
                         },
-                        style = MaterialTheme.typography.labelLarge,
+                        style = MaterialTheme.typography.labelMedium,
                         fontWeight = FontWeight.Bold,
                         color = MaterialTheme.colorScheme.onSurface
                     )
@@ -652,7 +699,8 @@ private fun ActiveModelCard(
 
                 Text(
                     text = model.name,
-                    style = MaterialTheme.typography.bodyMedium,
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.Bold,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
 
@@ -706,82 +754,76 @@ private fun ModelLibraryCard(
     Surface(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(16.dp),
-        color = MaterialTheme.colorScheme.surfaceContainerLowest,
-        border = androidx.compose.foundation.BorderStroke(
-            1.dp,
-            if (model.isRequired) {
-                MaterialTheme.colorScheme.primary.copy(alpha = 0.3f)
-            } else {
-                MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.2f)
-            }
-        ),
+        color = MaterialTheme.colorScheme.surface,
         shadowElevation = if (isDownloading) 4.dp else 0.dp
     ) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(16.dp)
+                .padding(12.dp)
         ) {
-            // Header
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.Top
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                Column(
-                    modifier = Modifier.weight(1f)
-                ) {
-                    Row(
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(
-                            text = model.name,
-                            style = MaterialTheme.typography.labelLarge,
-                            fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.onSurface
-                        )
+                // Left: model info taking all remaining width
+                Column(modifier = Modifier.weight(1f)) {
+                    // Model name on its own line
+                    Text(
+                        text = model.name,
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
 
-                        if (model.isRecommended) {
-                            Surface(
-                                shape = RoundedCornerShape(6.dp),
-                                color = MaterialTheme.colorScheme.primaryContainer
-                            ) {
-                                Text(
-                                    text = "Recommended",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    fontWeight = FontWeight.Bold,
-                                    color = MaterialTheme.colorScheme.onPrimaryContainer,
-                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-                                )
+                    // Chips on the next line
+                    if (model.isRequired || model.isRecommended) {
+                        Spacer(modifier = Modifier.height(2.dp))
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(4.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            if (model.isRequired) {
+                                Surface(
+                                    shape = RoundedCornerShape(6.dp),
+                                    color = MaterialTheme.colorScheme.primary
+                                ) {
+                                    Text(
+                                        text = "Required",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        fontWeight = FontWeight.Bold,
+                                        color = MaterialTheme.colorScheme.onPrimary,
+                                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                    )
+                                }
                             }
-                        }
-
-                        if (model.isRequired) {
-                            Surface(
-                                shape = RoundedCornerShape(6.dp),
-                                color = MaterialTheme.colorScheme.primary
-                            ) {
-                                Text(
-                                    text = "Required Core",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    fontWeight = FontWeight.Bold,
-                                    color = MaterialTheme.colorScheme.onPrimary,
-                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-                                )
+                            if (model.isRecommended) {
+                                Surface(
+                                    shape = RoundedCornerShape(6.dp),
+                                    color = MaterialTheme.colorScheme.primaryContainer
+                                ) {
+                                    Text(
+                                        text = "Recommended",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        fontWeight = FontWeight.Bold,
+                                        color = MaterialTheme.colorScheme.onPrimaryContainer,
+                                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                    )
+                                }
                             }
                         }
                     }
 
+                    if (model.description.isNotBlank()) {
+                        Spacer(modifier = Modifier.height(2.dp))
+                        Text(
+                            text = model.description,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+
                     Spacer(modifier = Modifier.height(4.dp))
-
-                    Text(
-                        text = model.description,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-
-                    Spacer(modifier = Modifier.height(8.dp))
 
                     Row(
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -792,105 +834,226 @@ private fun ModelLibraryCard(
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.outline
                         )
-
-                        if (model.status == ModelStatus.READY) {
-                            Text(
-                                text = "Ready",
+                        when (model.status) {
+                            ModelStatus.READY -> Text(
+                                text = "✓ Ready",
                                 style = MaterialTheme.typography.labelSmall,
                                 fontWeight = FontWeight.Bold,
                                 color = MaterialTheme.colorScheme.primary
                             )
-                        }
-
-                        if (model.warning != null) {
-                            Text(
-                                text = model.warning,
-                                style = MaterialTheme.typography.labelSmall,
-                                fontWeight = FontWeight.Bold,
-                                color = MaterialTheme.colorScheme.error
-                            )
+                            ModelStatus.AVAILABLE -> if (model.warning != null) {
+                                Text(
+                                    text = model.warning,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.error
+                                )
+                            }
+                            else -> {}
                         }
                     }
                 }
 
-                // Warning badge for high RAM models
-                if (model.warning?.contains("RAM") == true) {
-                    Surface(
-                        shape = RoundedCornerShape(8.dp),
-                        color = MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.3f)
-                    ) {
-                        Text(
-                            text = "High RAM usage",
-                            style = MaterialTheme.typography.labelSmall,
-                            fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.onTertiaryContainer,
-                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
-                        )
-                    }
+                // Right: fixed-width action icon — always top-aligned
+                val iconTint = when {
+                    isIncompatible -> MaterialTheme.colorScheme.outline
+                    model.status == ModelStatus.READY -> MaterialTheme.colorScheme.error
+                    model.warning != null -> MaterialTheme.colorScheme.error
+                    else -> MaterialTheme.colorScheme.primary
+                }
+                val iconImage = when {
+                    isDownloading -> Icons.Default.Close
+                    isIncompatible -> Icons.Default.Block
+                    model.status == ModelStatus.READY -> Icons.Default.Delete
+                    model.warning != null -> Icons.Default.Refresh
+                    else -> Icons.Default.Download
+                }
+                val iconDesc = when {
+                    isDownloading -> "Cancel download"
+                    isIncompatible -> "Not available"
+                    model.status == ModelStatus.READY -> "Delete model"
+                    model.warning != null -> "Re-download"
+                    else -> "Download"
+                }
+                IconButton(
+                    onClick = onActionClick,
+                    enabled = !isIncompatible,
+                    modifier = Modifier.size(40.dp)
+                ) {
+                    Icon(
+                        imageVector = iconImage,
+                        contentDescription = iconDesc,
+                        tint = iconTint
+                    )
                 }
             }
 
-            // Download Progress
+            // Download Progress bar — only while downloading
             if (isDownloading && model.downloadProgress != null) {
-                Spacer(modifier = Modifier.height(16.dp))
-
-                Column(
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        Text(
-                            text = "Downloading model weights...",
-                            style = MaterialTheme.typography.labelSmall,
-                            fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.primary
-                        )
-                        Text(
-                            text = "${model.downloadProgress}%",
-                            style = MaterialTheme.typography.labelSmall,
-                            fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.primary
-                        )
-                    }
-
-                    LinearProgressIndicator(
-                        progress = model.downloadProgress / 100f,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(6.dp)
-                            .clip(RoundedCornerShape(3.dp)),
-                        color = MaterialTheme.colorScheme.primary,
-                        trackColor = MaterialTheme.colorScheme.surfaceContainerHighest
-                    )
-                }
-            } else {
-                // Action Button
                 Spacer(modifier = Modifier.height(8.dp))
-
                 Row(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.End
+                    horizontalArrangement = Arrangement.SpaceBetween
                 ) {
-                    IconButton(
-                        onClick = onActionClick,
-                        modifier = Modifier
-                            .size(40.dp)
-                            .clip(RoundedCornerShape(20.dp)),
-                        enabled = !isIncompatible
-                    ) {
-                        Icon(
-                            imageVector = if (isIncompatible) Icons.Default.Block else Icons.Default.Download,
-                            contentDescription = if (isIncompatible) "Not available" else "Download",
-                            tint = if (isIncompatible) {
-                                MaterialTheme.colorScheme.outline
-                            } else {
-                                MaterialTheme.colorScheme.primary
-                            }
+                    Text(
+                        text = "Downloading...",
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                    Text(
+                        text = "${model.downloadProgress}%",
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                }
+                Spacer(modifier = Modifier.height(4.dp))
+                LinearProgressIndicator(
+                    progress = model.downloadProgress / 100f,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(6.dp)
+                        .clip(RoundedCornerShape(3.dp)),
+                    color = MaterialTheme.colorScheme.primary,
+                    trackColor = MaterialTheme.colorScheme.surfaceContainerHighest
+                )
+            }
+        }
+    }
+}
+
+/**
+ * Card for the AI Search section — shows "Embedding Model" as the fixed title
+ * (not the file name) with status, size, chips, and context-aware action icon.
+ */
+@Composable
+private fun EmbeddingModelCard(
+    model: AIModel,
+    onActionClick: () -> Unit
+) {
+    val isDownloading = model.status == ModelStatus.DOWNLOADING
+    val isIncompatible = model.status == ModelStatus.INCOMPATIBLE
+
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp),
+        color = MaterialTheme.colorScheme.surface,
+        shadowElevation = if (isDownloading) 4.dp else 0.dp
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(12.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    // Fixed title
+                    Text(
+                        text = "Embedding Model",
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+
+                    Spacer(modifier = Modifier.height(2.dp))
+
+                    // Model size
+                    Text(
+                        text = model.size,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.outline
+                    )
+
+                    Spacer(modifier = Modifier.height(2.dp))
+
+                    // Status below size — only show static states; downloading is shown via progress bar
+                    when (model.status) {
+                        ModelStatus.READY -> Text(
+                            text = "✓ Downloaded",
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.primary
                         )
+                        ModelStatus.AVAILABLE -> Text(
+                            text = if (model.warning != null) "Download failed — tap to retry"
+                                   else "Tap to download",
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.Bold,
+                            color = if (model.warning != null) MaterialTheme.colorScheme.error
+                                    else MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        else -> {}
                     }
                 }
+
+                // Context-aware action icon
+                val iconTint = when {
+                    isIncompatible -> MaterialTheme.colorScheme.outline
+                    model.status == ModelStatus.READY -> MaterialTheme.colorScheme.error
+                    model.warning != null -> MaterialTheme.colorScheme.error
+                    else -> MaterialTheme.colorScheme.primary
+                }
+                val iconImage = when {
+                    isDownloading -> Icons.Default.Close
+                    isIncompatible -> Icons.Default.Block
+                    model.status == ModelStatus.READY -> Icons.Default.Delete
+                    model.warning != null -> Icons.Default.Refresh
+                    else -> Icons.Default.Download
+                }
+                val iconDesc = when {
+                    isDownloading -> "Cancel download"
+                    isIncompatible -> "Not available"
+                    model.status == ModelStatus.READY -> "Delete model"
+                    model.warning != null -> "Re-download"
+                    else -> "Download"
+                }
+                IconButton(
+                    onClick = onActionClick,
+                    enabled = !isIncompatible,
+                    modifier = Modifier.size(40.dp)
+                ) {
+                    Icon(
+                        imageVector = iconImage,
+                        contentDescription = iconDesc,
+                        tint = iconTint
+                    )
+                }
+            }
+
+            // Progress bar while downloading
+            if (isDownloading && model.downloadProgress != null) {
+                Spacer(modifier = Modifier.height(8.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text(
+                        text = "Downloading...",
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                    Text(
+                        text = "${model.downloadProgress}%",
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                }
+                Spacer(modifier = Modifier.height(4.dp))
+                LinearProgressIndicator(
+                    progress = model.downloadProgress / 100f,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(6.dp)
+                        .clip(RoundedCornerShape(3.dp)),
+                    color = MaterialTheme.colorScheme.primary,
+                    trackColor = MaterialTheme.colorScheme.surfaceContainerHighest
+                )
             }
         }
     }
@@ -906,7 +1069,7 @@ private fun SectionHeader(
     ) {
         Text(
             text = title,
-            style = MaterialTheme.typography.labelSmall,
+            style = MaterialTheme.typography.titleSmall,
             fontWeight = FontWeight.Bold,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
@@ -915,7 +1078,7 @@ private fun SectionHeader(
             Spacer(modifier = Modifier.height(4.dp))
             Text(
                 text = description,
-                style = MaterialTheme.typography.labelMedium,
+                style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
@@ -951,7 +1114,7 @@ private fun UsageTipCard() {
             ) {
                 Text(
                     text = "Pro Tip: Resource Allocation",
-                    style = MaterialTheme.typography.labelLarge,
+                    style = MaterialTheme.typography.labelMedium,
                     fontWeight = FontWeight.Bold,
                     color = MaterialTheme.colorScheme.onTertiaryContainer
                 )

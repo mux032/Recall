@@ -6,6 +6,8 @@ import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.recall.app.domain.model.Screenshot
+import com.recall.app.data.local.ModelDownloadState
+import com.recall.app.data.local.ModelRepository
 import com.recall.app.data.nlp.VectorIndexOptimized
 import com.recall.app.domain.usecase.SearchScreenshotsUseCase
 import com.recall.app.domain.usecase.searchhistory.AddSearchHistoryUseCase
@@ -18,6 +20,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.isActive
@@ -38,7 +41,8 @@ class SearchViewModel @Inject constructor(
     savedStateHandle: SavedStateHandle,
     private val searchScreenshotsUseCase: SearchScreenshotsUseCase,
     private val addSearchHistoryUseCase: AddSearchHistoryUseCase,
-    private val vectorIndex: VectorIndexOptimized
+    private val vectorIndex: VectorIndexOptimized,
+    private val modelRepository: ModelRepository
 ) : ViewModel() {
 
     companion object {
@@ -53,17 +57,27 @@ class SearchViewModel @Inject constructor(
     val state: StateFlow<SearchState> = _state.asStateFlow()
 
     /**
-     * True when the vector index has at least one embedding loaded and AI search is available.
-     * False when no model has been downloaded yet — the SearchScreen shows an info banner.
+     * True when AI search is available — either:
+     * - The model has been downloaded ([ModelDownloadState.READY]), OR
+     * - The vector index has embeddings loaded (model downloaded + screenshots processed).
      *
-     * Polled every [VECTOR_INDEX_POLL_INTERVAL_MS] so the banner disappears automatically
-     * after [VectorIndexBootstrapper] finishes loading embeddings post-download.
+     * Using ModelDownloadState.READY as the primary signal means the banner hides
+     * immediately after a successful download, without waiting for VectorIndexBootstrapper
+     * to process screenshots (which only happens when there are existing screenshots).
+     *
+     * The VectorIndex poll acts as a secondary signal for cases where the model is loaded
+     * from assets (bundled) rather than downloaded.
      */
-    val isVectorIndexReady: StateFlow<Boolean> = flow {
-        while (true) {
-            emit(vectorIndex.isReady())
-            delay(VECTOR_INDEX_POLL_INTERVAL_MS)
-        }
+    val isVectorIndexReady: StateFlow<Boolean> = combine(
+        flow {
+            while (true) {
+                emit(vectorIndex.isReady())
+                delay(VECTOR_INDEX_POLL_INTERVAL_MS)
+            }
+        },
+        modelRepository.downloadState
+    ) { indexReady, downloadState ->
+        indexReady || downloadState == ModelDownloadState.READY
     }.stateIn(
         scope = viewModelScope,
         started = SharingStarted.WhileSubscribed(5_000),
