@@ -60,9 +60,10 @@ class ModelSelectorTest {
     }
 
     @Test
-    fun `selectModel returns full model for MEDIUM RAM`() {
+    fun `selectModel returns quantized model for MEDIUM RAM`() {
+        // MEDIUM (4–8GB) gets quantized to avoid OOM risk with 127MB full model
         val config = selectorFor(MemoryClass.MEDIUM).selectModel()
-        assertEquals(ModelSelector.FULL_MODEL_FILENAME, config.fileName)
+        assertEquals(ModelSelector.QUANTIZED_MODEL_FILENAME, config.fileName)
     }
 
     @Test
@@ -91,8 +92,8 @@ class ModelSelectorTest {
     }
 
     @Test
-    fun `selectModel MEDIUM RAM URL starts with huggingface`() {
-        val config = selectorFor(MemoryClass.MEDIUM).selectModel()
+    fun `selectModel HIGH RAM URL starts with huggingface`() {
+        val config = selectorFor(MemoryClass.HIGH).selectModel()
         assertTrue(
             "URL must start with https://huggingface.co, got: ${config.url}",
             config.url.startsWith("https://huggingface.co")
@@ -136,7 +137,7 @@ class ModelSelectorTest {
     @Test
     fun `quantized model is smaller than full model`() {
         val quantized = selectorFor(MemoryClass.LOW).selectModel()
-        val full = selectorFor(MemoryClass.MEDIUM).selectModel()
+        val full = selectorFor(MemoryClass.HIGH).selectModel()
         assertTrue(
             "Quantized model (${quantized.sizeBytes}) must be smaller than full model (${full.sizeBytes})",
             quantized.sizeBytes < full.sizeBytes

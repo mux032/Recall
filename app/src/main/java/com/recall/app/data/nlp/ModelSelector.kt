@@ -127,14 +127,23 @@ class ModelSelector @Inject constructor(
     /**
      * Returns the [ModelConfig] recommended for this device based on its RAM class.
      *
-     * - [MemoryClass.LOW] → [QUANTIZED_MODEL] (INT8 quantized, 34 MB, MTEB ~59.x)
-     * - [MemoryClass.MEDIUM], [MemoryClass.HIGH], [MemoryClass.VERY_HIGH] → [FULL_MODEL] (FP32, 133 MB, MTEB 62.17)
+     * The quantized model is the **safe default** for the majority of devices.
+     * Only devices with ≥ 8 GB RAM (HIGH / VERY_HIGH) receive the full FP32 model,
+     * which avoids OOM risk on 4–8 GB devices where the 127 MB model loaded on top
+     * of app baseline RAM (~200 MB) + vector cache (~75 MB) could exceed heap limits.
+     *
+     * | RAM class  | Model      | Size  | MTEB  |
+     * |------------|------------|-------|-------|
+     * | LOW (< 4GB)| Quantized  | 32 MB | ~59.x |
+     * | MEDIUM (4–8GB) | Quantized | 32 MB | ~59.x |
+     * | HIGH (8–16GB)  | Full FP32 | 127 MB | 62.17 |
+     * | VERY_HIGH (16GB+) | Full FP32 | 127 MB | 62.17 |
      */
     fun selectModel(): ModelConfig {
         val memoryClass = deviceProfiler.getProfile().memoryClass
         return when (memoryClass) {
-            MemoryClass.LOW -> QUANTIZED_MODEL
-            MemoryClass.MEDIUM,
+            MemoryClass.LOW,
+            MemoryClass.MEDIUM -> QUANTIZED_MODEL
             MemoryClass.HIGH,
             MemoryClass.VERY_HIGH -> FULL_MODEL
         }
