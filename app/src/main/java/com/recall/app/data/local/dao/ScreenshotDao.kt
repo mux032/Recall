@@ -96,7 +96,7 @@ interface ScreenshotDao {
     @Query("""
         SELECT screenshots.*
         FROM screenshots
-        JOIN screenshots_fts ON screenshots.id = screenshots_fts.docid
+        JOIN screenshots_fts ON screenshots.rowid = screenshots_fts.docid
         WHERE screenshots_fts MATCH :query || '*'
     """)
     suspend fun searchFts(query: String): List<ScreenshotEntity>
