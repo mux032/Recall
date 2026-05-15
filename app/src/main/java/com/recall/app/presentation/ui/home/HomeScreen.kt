@@ -208,8 +208,11 @@ fun HomeScreen(
                         // Screenshot Grid Items for this section
                         // Flatten the grid into individual items to avoid nested scrollable containers
                         val screenshotRows = section.screenshots.chunked(numColumns)
-                        screenshotRows.forEachIndexed { rowIndex, rowScreenshots ->
-                            item(key = "row-${section.label}-$rowIndex") {
+                        screenshotRows.forEachIndexed { _, rowScreenshots ->
+                            // Use the first screenshot ID in the row as a stable key.
+                            // Previously used rowIndex which shifts when items are inserted/deleted,
+                            // forcing Compose to recreate all rows below the insertion point.
+                            item(key = "row-${rowScreenshots.first().id}") {
                                 Row(
                                     modifier = Modifier.fillMaxWidth(),
                                     horizontalArrangement = Arrangement.spacedBy(12.dp)
