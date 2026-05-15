@@ -3,6 +3,8 @@ package com.recall.app.presentation.ui.home
 import com.recall.app.domain.model.Screenshot
 import com.recall.app.domain.model.ScreenshotFilter
 import com.recall.app.domain.repository.ScreenshotRepository
+import java.time.LocalDate
+import java.time.ZoneId
 import com.recall.app.domain.usecase.searchhistory.ClearSearchHistoryUseCase
 import com.recall.app.domain.usecase.searchhistory.DeleteSearchHistoryUseCase
 import com.recall.app.domain.usecase.searchhistory.GetSearchHistoryUseCase
@@ -317,10 +319,10 @@ class HomeViewModelTest {
 
     @Test
     fun `timelineSections emits sections grouped from screenshots`() = runTest {
-        val now = System.currentTimeMillis()
+        val noon = noonToday()
         val page = listOf(
-            buildScreenshot("today", dateCreated = now - 1 * 3_600_000L),    // 1h ago → Today
-            buildScreenshot("lastweek", dateCreated = now - 10 * 86_400_000L) // 10d ago → Last Week
+            buildScreenshot("today", dateCreated = noon - 1 * 3_600_000L),    // 1h before noon → Today
+            buildScreenshot("lastweek", dateCreated = noon - 10 * 86_400_000L) // 10d ago → Last Week
         )
         whenever(screenshotRepository.getScreenshotPage(any(), any())).thenReturn(page)
         viewModel = buildViewModel()
@@ -339,11 +341,11 @@ class HomeViewModelTest {
 
     @Test
     fun `timelineSections emits single Today section when all screenshots are recent`() = runTest {
-        val now = System.currentTimeMillis()
+        val noon = noonToday()
         val page = listOf(
-            buildScreenshot("a", dateCreated = now - 1 * 3_600_000L),
-            buildScreenshot("b", dateCreated = now - 2 * 3_600_000L),
-            buildScreenshot("c", dateCreated = now - 3 * 3_600_000L)
+            buildScreenshot("a", dateCreated = noon - 1 * 3_600_000L),
+            buildScreenshot("b", dateCreated = noon - 2 * 3_600_000L),
+            buildScreenshot("c", dateCreated = noon - 3 * 3_600_000L)
         )
         whenever(screenshotRepository.getScreenshotPage(any(), any())).thenReturn(page)
         viewModel = buildViewModel()
@@ -373,6 +375,9 @@ class HomeViewModelTest {
     // -----------------------------------------------------------------------
     // Helpers
     // -----------------------------------------------------------------------
+
+    private fun noonToday(): Long =
+        LocalDate.now().atTime(12, 0).atZone(ZoneId.systemDefault()).toInstant().toEpochMilli()
 
     private fun buildViewModel() = HomeViewModel(
         screenshotRepository,

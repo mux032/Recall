@@ -157,8 +157,10 @@ class TimelineUtilsTest {
     // Helpers
     // -----------------------------------------------------------------------
 
-    private fun todayMinusHours(hours: Long): Long =
-        System.currentTimeMillis() - hours * 3_600_000L
+    private fun todayMinusHours(hours: Long): Long {
+        val noonToday = LocalDate.now().atTime(12, 0).atZone(ZoneId.systemDefault()).toInstant().toEpochMilli()
+        return noonToday - hours * 3_600_000L
+    }
 
     private fun todayMinusDays(days: Long): Long {
         val date = LocalDate.now().minusDays(days)
