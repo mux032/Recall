@@ -51,7 +51,8 @@ fun RecallNavGraph(
                 onBackClick = { navController.popBackStack() },
                 onScreenshotClick = { screenshotId ->
                     navController.navigate(Screen.Detail.createRoute(screenshotId))
-                }
+                },
+                onSettingsClick = { navController.navigate(Screen.Settings.route) }
             )
         }
 

@@ -6,6 +6,7 @@ import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.recall.app.domain.model.Screenshot
+import com.recall.app.data.nlp.VectorIndexOptimized
 import com.recall.app.domain.usecase.SearchScreenshotsUseCase
 import com.recall.app.domain.usecase.searchhistory.AddSearchHistoryUseCase
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -14,8 +15,11 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.supervisorScope
@@ -33,16 +37,38 @@ sealed class SearchState {
 class SearchViewModel @Inject constructor(
     savedStateHandle: SavedStateHandle,
     private val searchScreenshotsUseCase: SearchScreenshotsUseCase,
-    private val addSearchHistoryUseCase: AddSearchHistoryUseCase
+    private val addSearchHistoryUseCase: AddSearchHistoryUseCase,
+    private val vectorIndex: VectorIndexOptimized
 ) : ViewModel() {
 
     companion object {
         private const val TAG = "SearchViewModel"
         private const val DEBOUNCE_DELAY_MS = 300L
+
+        /** How often to poll [VectorIndexOptimized.isReady] for the banner state. */
+        private const val VECTOR_INDEX_POLL_INTERVAL_MS = 2_000L
     }
 
     private val _state = MutableStateFlow<SearchState>(SearchState.Idle)
     val state: StateFlow<SearchState> = _state.asStateFlow()
+
+    /**
+     * True when the vector index has at least one embedding loaded and AI search is available.
+     * False when no model has been downloaded yet — the SearchScreen shows an info banner.
+     *
+     * Polled every [VECTOR_INDEX_POLL_INTERVAL_MS] so the banner disappears automatically
+     * after [VectorIndexBootstrapper] finishes loading embeddings post-download.
+     */
+    val isVectorIndexReady: StateFlow<Boolean> = flow {
+        while (true) {
+            emit(vectorIndex.isReady())
+            delay(VECTOR_INDEX_POLL_INTERVAL_MS)
+        }
+    }.stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(5_000),
+        initialValue = vectorIndex.isReady()
+    )
 
     // Note: Navigation uses String (URL-safe), ViewModel converts to TextFieldValue
     // for cursor position control. This separation is intentional.
