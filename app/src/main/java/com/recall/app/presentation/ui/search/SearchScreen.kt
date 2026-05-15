@@ -31,6 +31,7 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import com.recall.app.domain.model.Screenshot
+import com.recall.app.presentation.ui.home.screenshotContentDescription
 
 private const val TAG = "SearchFlow"
 
@@ -244,7 +245,7 @@ fun SearchResultItem(screenshot: Screenshot, onClick: () -> Unit) {
                 .data(screenshot.filePath)
                 .crossfade(true)
                 .build(),
-            contentDescription = "Screenshot ${screenshot.id}",
+            contentDescription = screenshotContentDescription(screenshot),
             contentScale = ContentScale.Crop,
             modifier = Modifier.fillMaxWidth()
         )
