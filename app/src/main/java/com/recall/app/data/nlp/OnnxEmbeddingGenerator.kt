@@ -5,117 +5,218 @@ import android.util.Log
 import ai.onnxruntime.OnnxTensor
 import ai.onnxruntime.OrtEnvironment
 import ai.onnxruntime.OrtSession
+import com.recall.app.data.local.ModelDownloadState
+import com.recall.app.data.local.ModelRepository
 import com.recall.app.domain.usecase.EmbeddingGenerator
 import com.recall.app.util.MemoryInfoHelper
 import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.filter
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
+import java.io.File
+import java.io.IOException
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlin.math.sqrt
 
 /**
- * ONNX-based embedding generator using sentence-transformers (all-MiniLM-L6-v2).
+ * ONNX-based sentence embedding generator.
  *
- * Features:
- * - Singleton pattern ensures single ONNX session instance (prevents memory leaks)
- * - Session created once on first use (lazy initialization)
- * - Memory-safe initialization with OutOfMemoryError handling
- * - Graceful degradation: returns null if model can't be loaded
- * - Proper resource cleanup via close() method
+ * ## Model resolution (priority order)
+ * 1. **`filesDir/models/<fileName>`** — model downloaded by [ModelDownloadWorker] (Phase 7)
+ * 2. **`assets/model.onnx`** — bundled model for development builds
+ * 3. **`null`** — no model available; [generate] returns `null` gracefully, no crash
  *
- * Note: The ONNX session is heavy (~90MB) and should only be created once.
- * This implementation ensures the session is reused across all embedding requests.
+ * ## Session lifecycle
+ * - Session is created lazily on the first [generate] call
+ * - Session is **reinitialised automatically** when [ModelRepository.downloadState]
+ *   transitions to [ModelDownloadState.READY] — so a freshly downloaded model is picked
+ *   up without an app restart
+ * - [close] releases all native ONNX resources; call from [Application.onTerminate]
+ *
+ * ## Graceful degradation
+ * When no model file is available [generate] returns `null` for every call.
+ * The caller ([SearchScreenshotsUseCase]) falls back to FTS-only search.
  */
 @Singleton
 class OnnxEmbeddingGenerator @Inject constructor(
     @ApplicationContext private val context: Context,
-    private val memoryInfoHelper: MemoryInfoHelper
+    private val memoryInfoHelper: MemoryInfoHelper,
+    private val modelRepository: ModelRepository
 ) : EmbeddingGenerator {
 
     companion object {
         private const val TAG = "OnnxEmbeddingGenerator"
-        private const val MIN_FREE_MEMORY_BYTES = 100 * 1024 * 1024L // 100MB minimum
+        private const val MIN_FREE_MEMORY_BYTES = 100 * 1024 * 1024L // 100 MB minimum
+        private const val ASSETS_MODEL_FILENAME = "model.onnx"
     }
 
     private val tokenizer = WordPieceTokenizer(context, "vocab.txt")
 
-    // Nullable references for proper lifecycle management
-    // Session is created on first use and can be closed in onTerminate()
     private var env: OrtEnvironment? = null
     private var session: OrtSession? = null
     private var isInitialized = false
     private var initializationFailed = false
     private var failureReason: String? = null
 
+    /** Scope used to observe [ModelRepository.downloadState] for auto-reinit. */
+    private val observerScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+
+    init {
+        // Observe downloadState — reinitialise session when a new model becomes READY
+        observerScope.launch {
+            modelRepository.downloadState
+                .distinctUntilChanged()
+                .filter { it == ModelDownloadState.READY }
+                .collect {
+                    Log.i(TAG, "New model READY — reinitialising ONNX session")
+                    reinitialise()
+                }
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Model path resolution
+    // -----------------------------------------------------------------------
+
     /**
-     * Initialize the ONNX session.
-     * Called automatically on first generate() call.
-     * 
-     * Memory-Safe Initialization:
-     * - Checks available memory before loading model
-     * - Catches OutOfMemoryError specifically
-     * - Sets failure flag to prevent retry loops
-     * - Returns gracefully without crashing
+     * Resolves the model file path using the priority order described in the class KDoc.
+     *
+     * @return Absolute path string, or `null` if no model is available.
+     */
+    internal fun resolveModelPath(): String? {
+        // 1. Check filesDir for downloaded model (primary)
+        val persistedPath = runBlocking {
+            modelRepository.downloadedModelPath.first()
+        }
+
+        if (persistedPath != null && File(persistedPath).exists()) {
+            Log.i(TAG, "Using downloaded model: $persistedPath")
+            return persistedPath
+        }
+
+        // 2. Fall back to assets/model.onnx (dev builds with bundled model)
+        return try {
+            context.assets.open(ASSETS_MODEL_FILENAME).use { /* verify accessible */ }
+            Log.i(TAG, "Using bundled assets model: $ASSETS_MODEL_FILENAME")
+            "assets://$ASSETS_MODEL_FILENAME"
+        } catch (e: IOException) {
+            Log.w(TAG, "No model available — not in filesDir and not in assets")
+            null
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Session lifecycle
+    // -----------------------------------------------------------------------
+
+    /**
+     * Closes the current session and resets state so the next [generate] call
+     * reinitialises from the most recently available model path.
+     */
+    private fun reinitialise() {
+        synchronized(this) {
+            try {
+                session?.close()
+                env?.close()
+            } catch (e: Exception) {
+                Log.w(TAG, "Error closing old session during reinit", e)
+            } finally {
+                session = null
+                env = null
+                isInitialized = false
+                initializationFailed = false
+                failureReason = null
+            }
+        }
+        Log.i(TAG, "ONNX session reset — will reinitialise on next generate() call")
+    }
+
+    /**
+     * Initialises the ONNX session from the best available model source.
+     * Checks available memory before loading to prevent OOM.
      */
     private fun initializeSession(): Result<Unit> {
         if (isInitialized) return Result.success(Unit)
-        if (initializationFailed) return Result.failure(Exception(failureReason ?: "Initialization previously failed"))
+        if (initializationFailed) return Result.failure(
+            Exception(failureReason ?: "Initialization previously failed")
+        )
 
-        // Check available memory before attempting to load
         val availableMemory = memoryInfoHelper.getAvailableMemory()
         if (availableMemory < MIN_FREE_MEMORY_BYTES) {
-            val errorMsg = "Insufficient memory for AI model: ${availableMemory / 1024 / 1024}MB available, need ${MIN_FREE_MEMORY_BYTES / 1024 / 1024}MB"
+            val errorMsg = "Insufficient memory for AI model: " +
+                "${availableMemory / 1024 / 1024}MB available, " +
+                "need ${MIN_FREE_MEMORY_BYTES / 1024 / 1024}MB"
             Log.w(TAG, errorMsg)
             initializationFailed = true
             failureReason = errorMsg
             return Result.failure(OutOfMemoryError(errorMsg))
         }
 
-        try {
-            env = OrtEnvironment.getEnvironment()
+        return try {
+            val modelPath = resolveModelPath()
 
-            val bytes = context.assets.open("model.onnx").readBytes()
+            if (modelPath == null) {
+                val errorMsg = "No model file available (not downloaded, not in assets)"
+                Log.w(TAG, errorMsg)
+                initializationFailed = true
+                failureReason = errorMsg
+                return Result.failure(Exception(errorMsg))
+            }
+
+            env = OrtEnvironment.getEnvironment()
             val sessionOptions = OrtSession.SessionOptions().apply {
                 setOptimizationLevel(OrtSession.SessionOptions.OptLevel.ALL_OPT)
-                setIntraOpNumThreads(2) // Run safely on device CPU without locking
+                setIntraOpNumThreads(2)
+            }
+
+            val bytes = if (modelPath.startsWith("assets://")) {
+                // Load from assets
+                context.assets.open(ASSETS_MODEL_FILENAME).readBytes()
+            } else {
+                // Load from filesDir
+                File(modelPath).readBytes()
             }
 
             session = env?.createSession(bytes, sessionOptions)
             isInitialized = true
-
-            Log.i(TAG, "ONNX session initialized successfully")
-            return Result.success(Unit)
+            Log.i(TAG, "ONNX session initialised from: $modelPath")
+            Result.success(Unit)
         } catch (e: OutOfMemoryError) {
             val errorMsg = "OutOfMemoryError loading AI model: ${e.message}"
             Log.e(TAG, errorMsg, e)
             initializationFailed = true
             failureReason = errorMsg
-            return Result.failure(e)
+            Result.failure(e)
         } catch (e: Exception) {
-            val errorMsg = "Failed to initialize ONNX session: ${e.message}"
+            val errorMsg = "Failed to initialise ONNX session: ${e.message}"
             Log.e(TAG, errorMsg, e)
             initializationFailed = true
             failureReason = errorMsg
-            return Result.failure(e)
+            Result.failure(e)
         }
     }
 
-    /**
-     * Check if the model is loaded and ready.
-     */
+    // -----------------------------------------------------------------------
+    // Public API
+    // -----------------------------------------------------------------------
+
+    /** Returns true when the ONNX session is loaded and ready. */
     fun isModelLoaded(): Boolean = isInitialized && session != null
 
-    /**
-     * Get the failure reason if initialization failed.
-     */
+    /** Returns the failure reason if initialisation failed, or null if successful. */
     fun getFailureReason(): String? = failureReason
 
-    /**
-     * Close the ONNX session to release native resources.
-     * Call this in Application.onTerminate() or when the generator is no longer needed.
-     */
+    /** Releases all native ONNX resources. Call from [Application.onTerminate]. */
     override fun close() {
+        observerScope.cancel()
         try {
             session?.close()
             env?.close()
@@ -131,12 +232,13 @@ class OnnxEmbeddingGenerator @Inject constructor(
     override suspend fun generate(text: String): FloatArray? = withContext(Dispatchers.Default) {
         if (text.isBlank()) return@withContext null
 
-        // Initialize session on first use (lazy initialization)
-        if (!isInitialized) {
-            val initResult = initializeSession()
-            if (initResult.isFailure) {
-                Log.w(TAG, "Skipping embedding generation: ${initResult.exceptionOrNull()?.message}")
-                return@withContext null
+        synchronized(this@OnnxEmbeddingGenerator) {
+            if (!isInitialized) {
+                val initResult = initializeSession()
+                if (initResult.isFailure) {
+                    Log.w(TAG, "Skipping embedding: ${initResult.exceptionOrNull()?.message}")
+                    return@withContext null
+                }
             }
         }
 
@@ -144,16 +246,13 @@ class OnnxEmbeddingGenerator @Inject constructor(
         val currentEnv = env ?: return@withContext null
 
         try {
-            // 1. Tokenize Text
             val maxLength = 256
             val tokens = tokenizer.tokenize(text, maxLength)
 
-            // 2. Prepare ONNX Array inputs (Shape: [batch_size=1, seq_length=256])
             val inputIdsArray = Array(1) { tokens.inputIds }
             val attentionMaskArray = Array(1) { tokens.attentionMask }
             val tokenTypeIdsArray = Array(1) { tokens.tokenTypeIds }
 
-            // 3. Create Tensors
             val inputIdsTensor = OnnxTensor.createTensor(currentEnv, inputIdsArray)
             val attentionMaskTensor = OnnxTensor.createTensor(currentEnv, attentionMaskArray)
             val tokenTypeIdsTensor = OnnxTensor.createTensor(currentEnv, tokenTypeIdsArray)
@@ -164,15 +263,10 @@ class OnnxEmbeddingGenerator @Inject constructor(
                 "token_type_ids" to tokenTypeIdsTensor
             )
 
-            // 4. Run Inference
             val result = currentSession.run(inputs)
-
-            // all-MiniLM-L6-v2 output is typically named "last_hidden_state"
-            // The shape is usually [1, seq_length, 384]
             val outputTensor = result.get(0) as? OnnxTensor
             val outputValue = outputTensor?.value as? Array<Array<FloatArray>>
 
-            // Clean up tensors immediately
             inputIdsTensor.close()
             attentionMaskTensor.close()
             tokenTypeIdsTensor.close()
@@ -180,10 +274,8 @@ class OnnxEmbeddingGenerator @Inject constructor(
 
             if (outputValue == null) return@withContext null
 
-            // 5. Mean Pooling & L2 Normalization required for sentence transformers
-            val hiddenStates = outputValue[0] // Get batch 0
+            val hiddenStates = outputValue[0]
             val pooledOutput = meanPooling(hiddenStates, tokens.attentionMask)
-
             return@withContext l2Normalize(pooledOutput)
 
         } catch (e: OutOfMemoryError) {
@@ -191,10 +283,13 @@ class OnnxEmbeddingGenerator @Inject constructor(
             null
         } catch (e: Exception) {
             Log.e(TAG, "Error generating embedding", e)
-            e.printStackTrace()
             null
         }
     }
+
+    // -----------------------------------------------------------------------
+    // Private — inference helpers (unchanged)
+    // -----------------------------------------------------------------------
 
     private fun meanPooling(hiddenStates: Array<FloatArray>, attentionMask: LongArray): FloatArray {
         val seqLen = hiddenStates.size
@@ -220,19 +315,10 @@ class OnnxEmbeddingGenerator @Inject constructor(
 
     private fun l2Normalize(vector: FloatArray): FloatArray {
         var sumSquares = 0f
-        for (v in vector) {
-            sumSquares += v * v
-        }
+        for (v in vector) { sumSquares += v * v }
         val norm = sqrt(sumSquares.toDouble()).toFloat()
-
-        // Avoid division by zero
         val eps = 1e-12f
         val denominator = if (norm < eps) eps else norm
-
-        val normalized = FloatArray(vector.size)
-        for (i in vector.indices) {
-            normalized[i] = vector[i] / denominator
-        }
-        return normalized
+        return FloatArray(vector.size) { i -> vector[i] / denominator }
     }
 }
