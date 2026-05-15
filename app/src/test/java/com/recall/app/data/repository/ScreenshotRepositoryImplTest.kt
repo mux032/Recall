@@ -79,7 +79,7 @@ class ScreenshotRepositoryImplTest {
             ocrText = null,
             category = "Uncategorized",
             tagsJson = "",
-            processingState = ProcessingState.Pending.value
+            processingState = ProcessingState.Pending
             // appName intentionally omitted — should default to ""
         )
         assertEquals("", entity.appName)
@@ -123,7 +123,7 @@ class ScreenshotRepositoryImplTest {
         ocrText = "Sample text",
         category = "Uncategorized",
         tagsJson = "",
-        processingState = ProcessingState.Done.value,
+        processingState = ProcessingState.Done,
         appName = appName
     )
 }

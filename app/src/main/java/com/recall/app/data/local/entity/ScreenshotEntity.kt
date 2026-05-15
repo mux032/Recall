@@ -37,7 +37,8 @@ data class ScreenshotEntity(
     val ocrText: String?,
     val category: String,
     val tagsJson: String,
-    val processingState: String,  // Keep as String for Room compatibility
+    /** Stored as a String in the DB via [com.recall.app.data.local.converter.ProcessingStateConverter]. */
+    val processingState: ProcessingState = ProcessingState.Pending,
     @ColumnInfo(typeAffinity = ColumnInfo.BLOB)
     val embeddingByteArray: ByteArray? = null,
     val isUserEdited: Boolean = false,
@@ -46,11 +47,7 @@ data class ScreenshotEntity(
     /** Package name of the app that created this screenshot (e.g. "com.whatsapp"). Populated from
      *  MediaStore.Images.Media.OWNER_PACKAGE_NAME on API 29+; empty string on older devices. */
     val appName: String = ""
-) {
-    // Helper property to convert between String and ProcessingState
-    val processingStateEnum: ProcessingState
-        get() = ProcessingState.fromValue(processingState)
-}
+)
 
 @Entity(tableName = "screenshots_fts")
 @Fts4(contentEntity = ScreenshotEntity::class)
@@ -75,7 +72,7 @@ fun ScreenshotEntity.toDomainModel(): Screenshot {
         isUserEdited = isUserEdited,
         userEditedAt = userEditedAt,
         ocrRetryCount = ocrRetryCount,
-        processingState = processingState,
+        processingState = processingState.value,
         appName = appName
     )
 }
