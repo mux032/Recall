@@ -663,7 +663,7 @@ fun ScreenshotItem(
                 .data(screenshot.filePath)
                 .crossfade(true)
                 .build(),
-            contentDescription = "Screenshot ${screenshot.id}",
+            contentDescription = screenshotContentDescription(screenshot),
             contentScale = ContentScale.Crop,
             modifier = Modifier
                 .fillMaxSize()
@@ -880,3 +880,26 @@ private fun formatTimeAgo(timestamp: Long): String {
         else -> "${diff / 604800_000}w ago"
     }
 }
+
+/**
+ * Generates a meaningful TalkBack content description for a screenshot image.
+ *
+ * Priority:
+ * 1. First [CONTENT_DESCRIPTION_MAX_CHARS] characters of OCR text — gives context about content.
+ * 2. Time-based fallback — used when OCR text is not yet available or blank.
+ *
+ * Examples:
+ * - `"Screenshot: Invoice #1234 Total due: $99.99 Pay by Nov 30…"`
+ * - `"Screenshot from 2h ago"`
+ */
+internal fun screenshotContentDescription(screenshot: com.recall.app.domain.model.Screenshot): String {
+    val ocrSnippet = screenshot.ocrText
+        ?.trim()
+        ?.take(CONTENT_DESCRIPTION_MAX_CHARS)
+        ?.let { if (it.isNotBlank()) "Screenshot: $it" else null }
+
+    return ocrSnippet ?: "Screenshot from ${formatTimeAgo(screenshot.timestamp)}"
+}
+
+/** Maximum number of OCR text characters used in a screenshot content description. */
+internal const val CONTENT_DESCRIPTION_MAX_CHARS = 100
