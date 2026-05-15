@@ -82,26 +82,6 @@ import java.time.format.DateTimeFormatter
 
 private const val TAG = "SearchFlow"
 
-/**
- * UI item representation for the home screen grid.
- * This sealed class ensures stable keys for LazyVerticalStaggeredGrid items,
- * preventing duplicate rendering issues.
- */
-sealed class UiItem {
-    data class Header(val label: String) : UiItem()
-    data class Screenshot(val screenshot: com.recall.app.domain.model.Screenshot) : UiItem()
-}
-
-/**
- * Data class for timeline section with header and screenshots.
- * This structure ensures headers act as section dividers with screenshots below.
- */
-data class TimelineSection(
-    val label: String,
-    val screenshots: List<com.recall.app.domain.model.Screenshot>,
-    val subLabel: String = ""
-)
-
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun HomeScreen(
@@ -112,6 +92,7 @@ fun HomeScreen(
     viewModel: HomeViewModel = hiltViewModel()
 ) {
     val screenshots by viewModel.screenshots.collectAsState()
+    val timelineSections by viewModel.timelineSections.collectAsState()
 
     // Refresh the screenshot list when we return from DetailScreen after a deletion
     val screenshotDeleted = navBackStackEntry
@@ -142,43 +123,8 @@ fun HomeScreen(
         }
     }
 
-    // CRITICAL FIX: Group screenshots by timeline section with proper structure
-    // This ensures headers act as section dividers with screenshots displayed BELOW each header
-    //
-    // Previous issue: Using LazyVerticalStaggeredGrid with mixed Header and Screenshot items
-    // caused them to flow into columns side-by-side (masonry layout behavior).
-    //
-    // Solution: Use LazyColumn with TimelineSection structure where each section contains:
-    // 1. A full-width DateSectionHeader
-    // 2. A nested LazyVerticalStaggeredGrid containing only screenshots for that section
-    val timelineSections = remember(screenshots) {
-        // Step 1: Remove duplicates by ID (in case of database duplicates)
-        val uniqueScreenshots = screenshots.distinctBy { it.id }
-
-        // Step 2: Group by timeline label
-        val groupedScreenshots = uniqueScreenshots.groupBy { screenshot ->
-            getTimelineLabel(screenshot.timestamp)
-        }
-
-        // Step 3: Sort groups in chronological order (newest first)
-        val sortedGroups = groupedScreenshots.toSortedMap { a, b ->
-            val order = listOf("Today", "Yesterday", "This Week", "Last Week", "This Month", "Older")
-            val indexA = order.indexOf(a).takeIf { it >= 0 } ?: order.size
-            val indexB = order.indexOf(b).takeIf { it >= 0 } ?: order.size
-            indexA.compareTo(indexB)
-        }
-
-        // Step 4: Create TimelineSection list with stable structure and computed sub-labels
-        sortedGroups.map { (label, screenshotsForLabel) ->
-            // Compute sub-label based on actual screenshot dates in this group
-            val subLabel = computeTimelineSubLabel(label, screenshotsForLabel)
-            TimelineSection(
-                label = label,
-                screenshots = screenshotsForLabel,
-                subLabel = subLabel
-            )
-        }
-    }
+    // timelineSections are now computed in HomeViewModel via buildTimelineSections()
+    // and exposed as a StateFlow — no computation needed here.
 
     Box(
         modifier = Modifier.fillMaxSize()
@@ -526,119 +472,6 @@ fun DateSectionHeader(
                 fontWeight = FontWeight.Medium
             )
         }
-    }
-}
-
-/**
- * Returns a timeline label based on the timestamp.
- * Groups: Today, Yesterday, This Week, Last Week, This Month, Older
- *
- * Timeline categories (mutually exclusive, each screenshot assigned to exactly ONE category):
- * - Today: Screenshots taken today (since midnight local time)
- * - Yesterday: Screenshots taken yesterday (previous day)
- * - This Week: Screenshots taken 2-6 days ago (within last 7 days, excluding today/yesterday)
- * - Last Week: Screenshots taken 7-13 days ago
- * - This Month: Screenshots taken 14+ days ago but still in the same calendar month
- * - Older: Screenshots from previous months (more than ~30 days ago or different month)
- */
-private fun getTimelineLabel(timestamp: Long): String {
-    val now = LocalDate.now()
-    // Convert timestamp (milliseconds since epoch) to LocalDate in system timezone
-    val screenshotDate = Instant.ofEpochMilli(timestamp)
-        .atZone(ZoneId.systemDefault())
-        .toLocalDate()
-
-    val daysDifference = ChronoUnit.DAYS.between(screenshotDate, now)
-
-    return when {
-        // Today: 0 days difference
-        daysDifference == 0L -> "Today"
-        // Yesterday: 1 day difference
-        daysDifference == 1L -> "Yesterday"
-        // This Week: 2-6 days ago (within the last week, but not today/yesterday)
-        daysDifference in 2..6 -> "This Week"
-        // Last Week: 7-13 days ago
-        daysDifference in 7..13 -> "Last Week"
-        // This Month: 14+ days ago but still in the same calendar month and year
-        // Note: This catches items that are too old for "Last Week" but still in current month
-        screenshotDate.monthValue == now.monthValue && screenshotDate.year == now.year -> "This Month"
-        // Older: Everything else (previous months or years)
-        else -> "Older"
-    }
-}
-
-/**
- * Returns a formatted sub-label for the timeline group.
- * Uses actual screenshot dates for "This Month" and "Older" categories.
- */
-private fun computeTimelineSubLabel(label: String, screenshots: List<com.recall.app.domain.model.Screenshot>): String {
-    val now = LocalDate.now(ZoneId.systemDefault())
-    val formatter = DateTimeFormatter.ofPattern("MMM dd")
-
-    return when (label) {
-        "Today" -> now.format(formatter)
-        "Yesterday" -> now.minusDays(1).format(formatter)
-        "This Week" -> {
-            val oldestDate = screenshots.maxOfOrNull { screenshot ->
-                Instant.ofEpochMilli(screenshot.timestamp)
-                    .atZone(ZoneId.systemDefault())
-                    .toLocalDate()
-                    .toEpochDay()
-            }?.let { epochDay ->
-                LocalDate.ofEpochDay(epochDay)
-            } ?: now.minusDays(6)
-            oldestDate.format(formatter) + " - " + now.format(formatter)
-        }
-        "Last Week" -> {
-            val lastWeekStart = now.minusDays(13)
-            val lastWeekEnd = now.minusDays(7)
-            lastWeekStart.format(formatter) + " - " + lastWeekEnd.format(formatter)
-        }
-        "This Month" -> {
-            // Get the actual month from the oldest screenshot in this group
-            val oldestScreenshotDate = screenshots.minByOrNull { it.timestamp }?.let { screenshot ->
-                Instant.ofEpochMilli(screenshot.timestamp)
-                    .atZone(ZoneId.systemDefault())
-                    .toLocalDate()
-            } ?: now
-            
-            oldestScreenshotDate.format(DateTimeFormatter.ofPattern("MMMM yyyy"))
-        }
-        "Older" -> {
-            // Get the actual month from the oldest screenshot in this group
-            val oldestScreenshotDate = screenshots.minByOrNull { it.timestamp }?.let { screenshot ->
-                Instant.ofEpochMilli(screenshot.timestamp)
-                    .atZone(ZoneId.systemDefault())
-                    .toLocalDate()
-            } ?: now
-            
-            oldestScreenshotDate.format(DateTimeFormatter.ofPattern("MMMM yyyy"))
-        }
-        else -> ""
-    }
-}
-
-/**
- * Returns a formatted sub-label for the timeline group.
- * @deprecated Use computeTimelineSubLabel instead which uses actual screenshot dates
- */
-@Deprecated("Use computeTimelineSubLabel instead")
-private fun getTimelineSubLabel(label: String): String {
-    val now = LocalDate.now()
-    val formatter = DateTimeFormatter.ofPattern("MMM dd")
-
-    return when (label) {
-        "Today" -> now.format(formatter)
-        "Yesterday" -> now.minusDays(1).format(formatter)
-        "This Week" -> now.minusDays(6).format(formatter) + " - " + now.format(formatter)
-        "Last Week" -> {
-            val lastWeekStart = now.minusDays(13)
-            val lastWeekEnd = now.minusDays(7)
-            lastWeekStart.format(formatter) + " - " + lastWeekEnd.format(formatter)
-        }
-        "This Month" -> now.format(DateTimeFormatter.ofPattern("MMMM yyyy"))
-        "Older" -> ""
-        else -> ""
     }
 }
 
