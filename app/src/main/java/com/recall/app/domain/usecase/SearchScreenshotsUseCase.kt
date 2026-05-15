@@ -33,9 +33,21 @@ class SearchScreenshotsUseCase @Inject constructor(
 
         /**
          * Timeout in milliseconds for AI embedding generation.
-         * Prevents hanging searches if the embedding model is slow or unresponsive.
+         *
+         * Set to 1500ms based on TRD requirement: P95 search latency < 2000ms.
+         * ONNX embedding generation takes 200–500ms on cold start (first query
+         * after app launch while the model loads into memory). The previous value
+         * of 100ms caused the AI path to always time out on cold start, making
+         * semantic search effectively non-functional for the first query.
+         *
+         * Budget breakdown:
+         * - Embedding generation (cold): up to 500ms
+         * - Vector index search:         up to 200ms
+         * - DB fetch + merge:            up to 100ms
+         * - Remaining headroom:          700ms
+         * Total:                        ≤ 1500ms (well within 2000ms P95 target)
          */
-        private const val AI_SEARCH_TIMEOUT_MS = 100L
+        const val AI_SEARCH_TIMEOUT_MS = 1500L
 
         /**
          * Maximum number of cached query results to store in LRU cache.
