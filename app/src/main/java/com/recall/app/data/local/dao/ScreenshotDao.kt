@@ -210,7 +210,7 @@ interface ScreenshotDao {
                 ocrText = ocrText,
                 category = "Uncategorized",
                 tagsJson = "",
-                processingState = ProcessingState.Done.value,
+                processingState = ProcessingState.Done,
                 embeddingByteArray = embedding
             )
             insert(entity)

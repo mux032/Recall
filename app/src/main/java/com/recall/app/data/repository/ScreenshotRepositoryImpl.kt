@@ -78,7 +78,7 @@ class ScreenshotRepositoryImpl @Inject constructor(
             ocrText = screenshot.ocrText,
             category = screenshot.category,
             tagsJson = screenshot.tags.joinToString(","),
-            processingState = ProcessingState.Done.value,
+            processingState = ProcessingState.Done,
             embeddingByteArray = floatArrayToByteArray(screenshot.embedding),
             isUserEdited = screenshot.isUserEdited,
             userEditedAt = screenshot.userEditedAt
@@ -122,7 +122,7 @@ class ScreenshotRepositoryImpl @Inject constructor(
             ocrText = finalOcrText,  // Use preserved text
             category = screenshot.category,
             tagsJson = screenshot.tags.joinToString(","),
-            processingState = ProcessingState.Done.value,
+            processingState = ProcessingState.Done,
             embeddingByteArray = floatArrayToByteArray(screenshot.embedding),
             isUserEdited = if (shouldPreserveUserEditedFlag) true else screenshot.isUserEdited,
             userEditedAt = if (shouldPreserveUserEditedFlag) existingEntity?.userEditedAt else screenshot.userEditedAt,
@@ -185,7 +185,7 @@ class ScreenshotRepositoryImpl @Inject constructor(
             val updatedEntity = entity.copy(
                 ocrText = extractedText,
                 embeddingByteArray = embedding?.let { floatArrayToByteArray(it) },
-                processingState = ProcessingState.Done.value,
+                processingState = ProcessingState.Done,
                 dateIndexed = System.currentTimeMillis(),
                 ocrRetryCount = 0  // Reset retry count on success
             )
@@ -406,7 +406,7 @@ class ScreenshotRepositoryImpl @Inject constructor(
                                 ocrText = null,
                                 category = "Uncategorized",
                                 tagsJson = "",
-                                processingState = ProcessingState.Pending.value,
+                                processingState = ProcessingState.Pending,
                                 appName = appName
                             )
 

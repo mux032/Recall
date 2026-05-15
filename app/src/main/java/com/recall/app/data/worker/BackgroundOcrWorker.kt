@@ -152,7 +152,7 @@ class BackgroundOcrWorker @AssistedInject constructor(
             val updatedScreenshot = screenshot.copy(
                 ocrText = extractedText,
                 embeddingByteArray = embedding?.let { floatToByteArray(it) },
-                processingState = ProcessingState.Done.value,
+                processingState = ProcessingState.Done,
                 ocrRetryCount = 0  // Reset retry count on success
             )
 
