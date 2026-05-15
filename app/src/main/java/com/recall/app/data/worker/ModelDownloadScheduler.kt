@@ -46,12 +46,19 @@ class ModelDownloadScheduler @Inject constructor(
 
         /**
          * WorkManager constraints for model download:
-         * - UNMETERED: Wi-Fi or ethernet only — never on mobile data
-         * - requiresCharging: device must be plugged in
+         * - UNMETERED: Wi-Fi or ethernet only — never on mobile data (non-negotiable)
+         * - requiresBatteryNotLow: skip download when battery is critically low (<~15%)
+         *
+         * Note: [Constraints.Builder.setRequiresCharging] is intentionally NOT set.
+         * Requiring charging is too strict — a user at 80% battery on Wi-Fi should not
+         * have to plug in just to download a 32–127 MB file. Major apps (Spotify, Netflix,
+         * Google Maps) download large files on battery without issue.
+         * [Constraints.Builder.setRequiresBatteryNotLow] acts as a safety net to prevent
+         * downloads when the device is genuinely low on power.
          */
         val DOWNLOAD_CONSTRAINTS: Constraints = Constraints.Builder()
             .setRequiredNetworkType(NetworkType.UNMETERED)
-            .setRequiresCharging(true)
+            .setRequiresBatteryNotLow(true)
             .build()
     }
 
@@ -87,7 +94,7 @@ class ModelDownloadScheduler @Inject constructor(
             workRequest
         )
 
-        Log.i(TAG, "Download scheduled for ${config.fileName} (${config.sizeBytes / 1_000_000} MB) — waiting for Wi-Fi + charging")
+        Log.i(TAG, "Download scheduled for ${config.fileName} (${config.sizeBytes / 1_000_000} MB) — waiting for Wi-Fi + battery not low")
     }
 
     /**

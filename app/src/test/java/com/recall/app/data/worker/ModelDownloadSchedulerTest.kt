@@ -40,21 +40,22 @@ class ModelDownloadSchedulerTest {
     }
 
     @Test
-    fun `DOWNLOAD_CONSTRAINTS requires charging`() {
+    fun `DOWNLOAD_CONSTRAINTS does NOT require charging`() {
+        // Charging is intentionally NOT required — a user at 80% on Wi-Fi should not
+        // have to plug in to download a 32–127MB file. requiresBatteryNotLow is the
+        // appropriate safety net instead.
         val constraints = ModelDownloadScheduler.DOWNLOAD_CONSTRAINTS
-        assertTrue(
-            "Must require charging to avoid draining battery on 32–127MB download",
-            constraints.requiresCharging()
-        )
+        assertEquals(false, constraints.requiresCharging())
     }
 
     @Test
-    fun `DOWNLOAD_CONSTRAINTS does not require battery not low`() {
-        // requiresBatteryNotLow adds an extra constraint that could delay the download
-        // unnecessarily — charging already implies the battery is being replenished
+    fun `DOWNLOAD_CONSTRAINTS requires battery not low`() {
+        // Safety net: don't download when device is critically low on power (~15%)
         val constraints = ModelDownloadScheduler.DOWNLOAD_CONSTRAINTS
-        // This is the default (false) — verify it hasn't been accidentally set
-        assertEquals(false, constraints.requiresBatteryNotLow())
+        assertTrue(
+            "Must require battery not low as a safety net for low-power devices",
+            constraints.requiresBatteryNotLow()
+        )
     }
 
     @Test
@@ -132,15 +133,19 @@ class ModelDownloadSchedulerTest {
     // -----------------------------------------------------------------------
 
     @Test
-    fun `manually built constraints with UNMETERED and charging match DOWNLOAD_CONSTRAINTS`() {
+    fun `manually built constraints with UNMETERED and battery-not-low match DOWNLOAD_CONSTRAINTS`() {
         val manual = Constraints.Builder()
             .setRequiredNetworkType(NetworkType.UNMETERED)
-            .setRequiresCharging(true)
+            .setRequiresBatteryNotLow(true)
             .build()
 
         assertEquals(
             ModelDownloadScheduler.DOWNLOAD_CONSTRAINTS.requiredNetworkType,
             manual.requiredNetworkType
+        )
+        assertEquals(
+            ModelDownloadScheduler.DOWNLOAD_CONSTRAINTS.requiresBatteryNotLow(),
+            manual.requiresBatteryNotLow()
         )
         assertEquals(
             ModelDownloadScheduler.DOWNLOAD_CONSTRAINTS.requiresCharging(),
