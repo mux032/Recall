@@ -105,6 +105,9 @@ dependencies {
     implementation("androidx.hilt:hilt-work:1.1.0")
     ksp("androidx.hilt:hilt-compiler:1.1.0")
     
+    // OkHttp — streaming HTTP download for ModelDownloadWorker
+    implementation("com.squareup.okhttp3:okhttp:4.12.0")
+
     // ML Kit OCR
     implementation("com.google.mlkit:text-recognition:16.0.0")
     
@@ -114,6 +117,7 @@ dependencies {
 
     // Testing
     testImplementation("junit:junit:4.13.2")
+    testImplementation("com.squareup.okhttp3:mockwebserver:4.12.0")
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.7.3")
     testImplementation("org.robolectric:robolectric:4.11.1")
     testImplementation("org.mockito.kotlin:mockito-kotlin:5.2.1")
