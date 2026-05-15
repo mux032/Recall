@@ -9,10 +9,10 @@ import javax.inject.Singleton
  * Describes a specific ONNX model variant available for download.
  *
  * @param url         HuggingFace CDN URL for the model file.
- * @param sha256      Hex-encoded SHA-256 checksum used to verify download integrity.
+ * @param sha256      Hex-encoded SHA-256 checksum used by [ModelDownloadWorker] for integrity verification.
  * @param fileName    Local filename written to `filesDir/models/`.
  * @param displayName Human-readable name shown in SettingsScreen.
- * @param sizeBytes   Approximate download size in bytes.
+ * @param sizeBytes   Exact download size in bytes (from LFS metadata).
  */
 data class ModelConfig(
     val url: String,
@@ -25,20 +25,30 @@ data class ModelConfig(
 /**
  * Selects the appropriate ONNX embedding model based on device RAM class.
  *
- * ## Model variants
+ * ## Model — BAAI/bge-small-en-v1.5
  *
- * | RAM class          | Model            | Size   | Reason                                     |
- * |--------------------|------------------|--------|--------------------------------------------|
- * | LOW (< 4 GB)       | INT8 quantized   | ~23 MB | Smaller footprint; acceptable accuracy loss |
- * | MEDIUM / HIGH /    | FP32 full        | ~90 MB | Full accuracy; device has RAM headroom      |
- * | VERY_HIGH (≥ 4 GB) |                  |        |                                             |
+ * Both variants are ONNX exports of **BAAI/bge-small-en-v1.5** — a retrieval-optimised
+ * sentence embedding model that significantly outperforms the previous `all-MiniLM-L6-v2`
+ * while using the **same 384 output dimensions**. This means zero changes to
+ * `VectorIndexOptimized`, `OnnxEmbeddingGenerator`, or the embedding storage schema.
  *
- * Both variants are `all-MiniLM-L6-v2` from the Sentence Transformers family,
- * hosted on HuggingFace. The INT8 version is post-training quantized.
+ * ### Performance comparison (MTEB English benchmark)
+ * | Model                     | MTEB Avg | Dims | Size   |
+ * |---------------------------|----------|------|--------|
+ * | all-MiniLM-L6-v2 (old)    | 56.26    | 384  | ~90 MB |
+ * | bge-small-en-v1.5 (full)  | **62.17** | 384 | 133 MB |
+ * | bge-small-en-v1.5 (quant) | ~59.x    | 384  | 34 MB  |
  *
- * ## SHA-256 values
- * The checksums are compile-time constants — [ModelDownloadWorker] verifies the
- * downloaded file against these values before marking the model as READY.
+ * ### Variants
+ * | RAM class          | Variant             | Size    | Source                     |
+ * |--------------------|---------------------|---------|----------------------------|
+ * | LOW (< 4 GB)       | INT8 quantized ONNX | 34 MB   | Xenova/bge-small-en-v1.5   |
+ * | MEDIUM / HIGH /    | Full FP32 ONNX      | 133 MB  | BAAI/bge-small-en-v1.5     |
+ * | VERY_HIGH (≥ 4 GB) |                     |         |                            |
+ *
+ * ## SHA-256 checksums
+ * Values are taken directly from the HuggingFace LFS pointer files and are used by
+ * [ModelDownloadWorker] to verify download integrity before marking the model as READY.
  *
  * @param deviceProfiler Provides the device RAM class; injected for testability.
  */
@@ -50,43 +60,49 @@ class ModelSelector @Inject constructor(
     companion object {
 
         // -----------------------------------------------------------------------
-        // Full FP32 model — all-MiniLM-L6-v2 (384-dim embeddings)
-        // Recommended for devices with ≥ 4 GB RAM.
+        // Full FP32 model — BAAI/bge-small-en-v1.5
+        // Recommended for devices with ≥ 4 GB RAM (MEDIUM / HIGH / VERY_HIGH).
+        // MTEB Avg: 62.17 | Dims: 384 | Size: 133 MB
         // -----------------------------------------------------------------------
 
-        /** HuggingFace URL for the full FP32 all-MiniLM-L6-v2 ONNX model. */
+        /** HuggingFace URL for the full FP32 bge-small-en-v1.5 ONNX model. */
         const val FULL_MODEL_URL =
-            "https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2" +
-                "/resolve/main/onnx/model.onnx"
+            "https://huggingface.co/BAAI/bge-small-en-v1.5/resolve/main/onnx/model.onnx"
 
-        /** SHA-256 checksum for [FULL_MODEL_URL]. Used by ModelDownloadWorker for integrity verification. */
+        /**
+         * SHA-256 checksum for [FULL_MODEL_URL].
+         * Source: LFS pointer at BAAI/bge-small-en-v1.5/raw/main/onnx/model.onnx
+         */
         const val FULL_MODEL_SHA256 =
-            "5e3c4d1f9a7b2e8f0c6d3a4b5e2f1c8d9a0b3e4f5c6d7a8b9c0d1e2f3a4b5c6d"
+            "828e1496d7fabb79cfa4dcd84fa38625c0d3d21da474a00f08db0f559940cf35"
 
-        const val FULL_MODEL_FILENAME = "model.onnx"
-        const val FULL_MODEL_DISPLAY_NAME = "all-MiniLM-L6-v2 (Full, ~90 MB)"
-        const val FULL_MODEL_SIZE_BYTES = 90_000_000L
+        const val FULL_MODEL_FILENAME = "bge-small-en-v1.5.onnx"
+        const val FULL_MODEL_DISPLAY_NAME = "bge-small-en-v1.5 (Full FP32, 133 MB)"
+        const val FULL_MODEL_SIZE_BYTES = 133_093_490L
 
         // -----------------------------------------------------------------------
-        // Quantized INT8 model — all-MiniLM-L6-v2-int8
-        // Recommended for devices with < 4 GB RAM.
+        // Quantized INT8 model — Xenova/bge-small-en-v1.5 (model_quantized.onnx)
+        // Recommended for devices with < 4 GB RAM (LOW).
+        // MTEB Avg: ~59.x | Dims: 384 | Size: 34 MB
         // -----------------------------------------------------------------------
 
-        /** HuggingFace URL for the INT8 quantized all-MiniLM-L6-v2 ONNX model. */
+        /** HuggingFace URL for the INT8 quantized bge-small-en-v1.5 ONNX model (Xenova conversion). */
         const val QUANTIZED_MODEL_URL =
-            "https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2" +
-                "/resolve/main/onnx/model_int8.onnx"
+            "https://huggingface.co/Xenova/bge-small-en-v1.5/resolve/main/onnx/model_quantized.onnx"
 
-        /** SHA-256 checksum for [QUANTIZED_MODEL_URL]. */
+        /**
+         * SHA-256 checksum for [QUANTIZED_MODEL_URL].
+         * Source: LFS pointer at Xenova/bge-small-en-v1.5/raw/main/onnx/model_quantized.onnx
+         */
         const val QUANTIZED_MODEL_SHA256 =
-            "1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0f1a2b"
+            "6c9c6101a956d62dfb5e7190c538226c0c5bb9cb27b651234b6df063ee7dbfe4"
 
-        const val QUANTIZED_MODEL_FILENAME = "model_int8.onnx"
-        const val QUANTIZED_MODEL_DISPLAY_NAME = "all-MiniLM-L6-v2 INT8 (Quantized, ~23 MB)"
-        const val QUANTIZED_MODEL_SIZE_BYTES = 23_000_000L
+        const val QUANTIZED_MODEL_FILENAME = "bge-small-en-v1.5-int8.onnx"
+        const val QUANTIZED_MODEL_DISPLAY_NAME = "bge-small-en-v1.5 INT8 (Quantized, 34 MB)"
+        const val QUANTIZED_MODEL_SIZE_BYTES = 34_014_426L
 
         // -----------------------------------------------------------------------
-        // Pre-built ModelConfig instances (avoids repeated object creation)
+        // Pre-built ModelConfig instances
         // -----------------------------------------------------------------------
 
         /** Full FP32 model config — for devices with ≥ 4 GB RAM. */
@@ -111,8 +127,8 @@ class ModelSelector @Inject constructor(
     /**
      * Returns the [ModelConfig] recommended for this device based on its RAM class.
      *
-     * - [MemoryClass.LOW] → [QUANTIZED_MODEL] (quantized INT8, ~23 MB)
-     * - [MemoryClass.MEDIUM], [MemoryClass.HIGH], [MemoryClass.VERY_HIGH] → [FULL_MODEL] (~90 MB)
+     * - [MemoryClass.LOW] → [QUANTIZED_MODEL] (INT8 quantized, 34 MB, MTEB ~59.x)
+     * - [MemoryClass.MEDIUM], [MemoryClass.HIGH], [MemoryClass.VERY_HIGH] → [FULL_MODEL] (FP32, 133 MB, MTEB 62.17)
      */
     fun selectModel(): ModelConfig {
         val memoryClass = deviceProfiler.getProfile().memoryClass
@@ -125,7 +141,7 @@ class ModelSelector @Inject constructor(
     }
 
     /**
-     * Returns all available model variants, ordered from smallest to largest.
+     * Returns all available model variants ordered smallest to largest.
      * Used by SettingsViewModel to populate the model selection list.
      */
     fun getAllModels(): List<ModelConfig> = listOf(QUANTIZED_MODEL, FULL_MODEL)

@@ -210,15 +210,15 @@ class ModelSelectorTest {
 
     @Test
     fun `FULL_MODEL_URL constant is correct HuggingFace path`() {
-        assertTrue(ModelSelector.FULL_MODEL_URL.contains("all-MiniLM-L6-v2"))
+        assertTrue(ModelSelector.FULL_MODEL_URL.contains("bge-small-en-v1.5"))
         assertTrue(ModelSelector.FULL_MODEL_URL.contains("model.onnx"))
         assertTrue(ModelSelector.FULL_MODEL_URL.startsWith("https://huggingface.co"))
     }
 
     @Test
     fun `QUANTIZED_MODEL_URL constant is correct HuggingFace path`() {
-        assertTrue(ModelSelector.QUANTIZED_MODEL_URL.contains("all-MiniLM-L6-v2"))
-        assertTrue(ModelSelector.QUANTIZED_MODEL_URL.contains("model_int8.onnx"))
+        assertTrue(ModelSelector.QUANTIZED_MODEL_URL.contains("bge-small-en-v1.5"))
+        assertTrue(ModelSelector.QUANTIZED_MODEL_URL.contains("model_quantized.onnx"))
         assertTrue(ModelSelector.QUANTIZED_MODEL_URL.startsWith("https://huggingface.co"))
     }
 
