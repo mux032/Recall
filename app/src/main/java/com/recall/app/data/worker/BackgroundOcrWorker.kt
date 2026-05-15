@@ -61,8 +61,7 @@ class BackgroundOcrWorker @AssistedInject constructor(
             var errorCount = 0
 
             // Process in batches to avoid overwhelming the device
-            val batchSize = 5 // Process 5 at a time
-            val batches = allScreenshots.chunked(batchSize)
+            val batches = allScreenshots.chunked(BATCH_SIZE)
 
             for ((batchIndex, batch) in batches.withIndex()) {
                 Log.d(TAG, "Processing batch ${batchIndex + 1}/${batches.size}")
@@ -84,15 +83,15 @@ class BackgroundOcrWorker @AssistedInject constructor(
 
                     processedCount++
 
-                    // Small delay between processing to avoid overheating
-                    if (processedCount % 3 == 0) {
-                        kotlinx.coroutines.delay(500)
+                    // Small delay every N screenshots to avoid CPU/thermal throttling
+                    if (processedCount % THROTTLE_EVERY_N_ITEMS == 0) {
+                        kotlinx.coroutines.delay(INTER_ITEM_DELAY_MS)
                     }
                 }
 
-                // Longer delay between batches
+                // Longer cool-down between batches to let the device breathe
                 if (batchIndex < batches.size - 1) {
-                    kotlinx.coroutines.delay(2000)
+                    kotlinx.coroutines.delay(INTER_BATCH_DELAY_MS)
                 }
             }
 
@@ -187,14 +186,43 @@ class BackgroundOcrWorker @AssistedInject constructor(
 
         /**
          * Maximum number of OCR retry attempts per screenshot.
-         * Prevents infinite loops on persistent OCR failures.
+         * Prevents infinite loops on persistent OCR failures (e.g. corrupt image, ML Kit bug).
          */
         const val MAX_OCR_RETRIES = 3
 
         /**
-         * Maximum number of screenshots to process in one run.
-         * This prevents the worker from running too long and draining battery.
+         * Maximum number of screenshots to process in one worker run.
+         * Caps total run time to prevent the OS from killing a long-running worker
+         * and to avoid draining battery on large backlogs.
          */
         const val MAX_SCREENSHOTS_PER_RUN = 20
+
+        /**
+         * Number of screenshots processed per batch before applying [INTER_BATCH_DELAY_MS].
+         * Smaller batches give the device more breathing room between CPU bursts.
+         * Value of 5 keeps each batch under ~2–3 seconds of active processing.
+         */
+        const val BATCH_SIZE = 5
+
+        /**
+         * Cool-down delay (ms) between consecutive batches.
+         * Allows the CPU and thermal sensors to recover between processing bursts,
+         * reducing the risk of thermal throttling on mid-range devices.
+         * 2 000 ms (2 s) is a safe balance between throughput and thermal impact.
+         */
+        const val INTER_BATCH_DELAY_MS = 2_000L
+
+        /**
+         * Short delay (ms) applied every [THROTTLE_EVERY_N_ITEMS] screenshots within a batch.
+         * Prevents sustained 100% CPU usage during OCR by yielding briefly to the scheduler.
+         * 500 ms every 3 items adds ~167 ms overhead per item — acceptable for background work.
+         */
+        const val INTER_ITEM_DELAY_MS = 500L
+
+        /**
+         * How often (every N items) the [INTER_ITEM_DELAY_MS] throttle is applied within a batch.
+         * A value of 3 means the worker pauses after every 3rd screenshot processed.
+         */
+        const val THROTTLE_EVERY_N_ITEMS = 3
     }
 }
