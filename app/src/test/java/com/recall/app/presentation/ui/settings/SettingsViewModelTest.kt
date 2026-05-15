@@ -7,7 +7,10 @@ import com.recall.app.data.local.ModelDownloadState
 import com.recall.app.data.local.ModelRepository
 import com.recall.app.data.nlp.ModelConfig
 import com.recall.app.data.nlp.ModelSelector
+import com.recall.app.data.local.UserPreferences
+import com.recall.app.data.nlp.VectorIndexOptimized
 import com.recall.app.data.worker.ModelDownloadScheduler
+import com.recall.app.domain.model.CacheLimitOption
 import com.recall.app.util.MemoryClass
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -49,6 +52,8 @@ class SettingsViewModelTest {
     private lateinit var modelSelector: ModelSelector
     private lateinit var modelRepository: ModelRepository
     private lateinit var modelDownloadScheduler: ModelDownloadScheduler
+    private lateinit var userPreferences: UserPreferences
+    private lateinit var vectorIndex: VectorIndexOptimized
 
     private val testDispatcher = StandardTestDispatcher()
 
@@ -75,9 +80,12 @@ class SettingsViewModelTest {
         modelSelector = mock()
         modelRepository = mock()
         modelDownloadScheduler = mock()
+        userPreferences = mock()
+        vectorIndex = mock()
 
         // Default stubs
         whenever(deviceProfiler.getProfile()).thenReturn(testProfile)
+        whenever(userPreferences.vectorCacheLimitFlow).thenReturn(flowOf(CacheLimitOption.AUTO))
         whenever(modelSelector.selectModel()).thenReturn(testModel)
         whenever(modelRepository.downloadState).thenReturn(flowOf(ModelDownloadState.NONE))
         whenever(modelRepository.downloadProgress).thenReturn(flowOf(0f))
@@ -283,13 +291,52 @@ class SettingsViewModelTest {
     }
 
     // -----------------------------------------------------------------------
+    // Cache limit — sourced from UserPreferences
+    // -----------------------------------------------------------------------
+
+    @Test
+    fun `cacheLimitOption initial value is AUTO from UserPreferences`() {
+        whenever(userPreferences.vectorCacheLimitFlow).thenReturn(flowOf(CacheLimitOption.AUTO))
+        val viewModel = buildViewModel()
+        assertEquals(CacheLimitOption.AUTO, viewModel.cacheLimitOption.value)
+    }
+
+    @Test
+    fun `setCacheLimitOption persists to UserPreferences`() = runTest {
+        val viewModel = buildViewModel()
+        viewModel.setCacheLimitOption(CacheLimitOption.CONSERVATIVE)
+        advanceUntilIdle()
+        verify(userPreferences).setVectorCacheLimit(CacheLimitOption.CONSERVATIVE)
+    }
+
+    // -----------------------------------------------------------------------
     // Helper
     // -----------------------------------------------------------------------
+
+    @Test
+    fun `deleteModel clears VectorIndex in memory so banner reappears`() = runTest {
+        val viewModel = buildViewModel()
+        viewModel.deleteModel()
+        advanceUntilIdle()
+        verify(vectorIndex).clear()
+    }
+
+    @Test
+    fun `deleteModel cancels WorkManager job before clearing state`() = runTest {
+        val viewModel = buildViewModel()
+        viewModel.deleteModel()
+        advanceUntilIdle()
+        val inOrder = org.mockito.kotlin.inOrder(modelDownloadScheduler, modelRepository)
+        inOrder.verify(modelDownloadScheduler).cancelDownload()
+        inOrder.verify(modelRepository).clearModel()
+    }
 
     private fun buildViewModel() = SettingsViewModel(
         deviceProfiler = deviceProfiler,
         modelSelector = modelSelector,
         modelRepository = modelRepository,
-        modelDownloadScheduler = modelDownloadScheduler
+        modelDownloadScheduler = modelDownloadScheduler,
+        userPreferences = userPreferences,
+        vectorIndex = vectorIndex
     )
 }

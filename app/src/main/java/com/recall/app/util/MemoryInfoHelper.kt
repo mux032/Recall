@@ -14,8 +14,8 @@ import javax.inject.Singleton
  * Memory Class Classification:
  * - LOW: < 4GB RAM (budget devices)
  * - MEDIUM: 4-8GB RAM (mid-range devices)
- * - HIGH: 8-16GB RAM (high-end devices)
- * - VERY_HIGH: 16GB+ RAM (power user devices)
+ * - HIGH: 8-12GB RAM (high-end devices)
+ * - VERY_HIGH: 12GB+ RAM (~16GB marketed devices and above)
  *
  * Cache Limit Calculation:
  * - Uses 5-10% of available RAM for vector cache
@@ -33,7 +33,9 @@ class MemoryInfoHelper @Inject constructor(
         // Memory thresholds in bytes
         private const val RAM_4GB = 4L * 1024 * 1024 * 1024
         private const val RAM_8GB = 8L * 1024 * 1024 * 1024
-        private const val RAM_16GB = 16L * 1024 * 1024 * 1024
+        // Devices marketed as "16 GB" report ~15.x GB due to firmware/kernel reservations.
+        // Use 12 GB as the VERY_HIGH threshold so any 16 GB device is correctly classified.
+        private const val RAM_16GB = 12L * 1024 * 1024 * 1024
 
         // Cache limits based on memory class
         private const val CACHE_LIMIT_LOW = 50_000      // ~75MB for low RAM devices
@@ -248,8 +250,8 @@ class MemoryInfoHelper @Inject constructor(
 enum class MemoryClass {
     LOW,        // < 4GB RAM
     MEDIUM,     // 4-8GB RAM
-    HIGH,       // 8-16GB RAM
-    VERY_HIGH   // 16GB+ RAM
+    HIGH,       // 8-12GB RAM
+    VERY_HIGH   // 12GB+ RAM (~16GB marketed devices and above)
 }
 
 /**

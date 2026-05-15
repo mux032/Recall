@@ -10,10 +10,14 @@ import com.recall.app.data.local.ModelDownloadState
 import com.recall.app.data.local.ModelRepository
 import com.recall.app.data.nlp.ModelConfig
 import com.recall.app.data.nlp.ModelSelector
+import com.recall.app.data.local.UserPreferences
+import com.recall.app.data.nlp.VectorIndexOptimized
 import com.recall.app.data.worker.ModelDownloadScheduler
+import com.recall.app.domain.model.CacheLimitOption
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
@@ -42,7 +46,9 @@ class SettingsViewModel @Inject constructor(
     private val deviceProfiler: DeviceProfiler,
     private val modelSelector: ModelSelector,
     private val modelRepository: ModelRepository,
-    private val modelDownloadScheduler: ModelDownloadScheduler
+    private val modelDownloadScheduler: ModelDownloadScheduler,
+    private val userPreferences: UserPreferences,
+    private val vectorIndex: VectorIndexOptimized
 ) : ViewModel() {
 
     companion object {
@@ -126,6 +132,23 @@ class SettingsViewModel @Inject constructor(
             )
 
     // -----------------------------------------------------------------------
+    // Cache limit — sourced from UserPreferences DataStore
+    // -----------------------------------------------------------------------
+
+    /** Current vector cache limit option, persisted in DataStore. */
+    val cacheLimitOption: StateFlow<CacheLimitOption> = userPreferences.vectorCacheLimitFlow
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5_000),
+            initialValue = CacheLimitOption.AUTO
+        )
+
+    /** Persists the user's chosen cache limit option to DataStore. */
+    fun setCacheLimitOption(option: CacheLimitOption) {
+        viewModelScope.launch { userPreferences.setVectorCacheLimit(option) }
+    }
+
+    // -----------------------------------------------------------------------
     // Actions
     // -----------------------------------------------------------------------
 
@@ -166,21 +189,31 @@ class SettingsViewModel @Inject constructor(
      */
     fun deleteModel() {
         viewModelScope.launch {
-            val path = modelRepository.downloadedModelPath
-            // Delete the file from disk if it exists
-            path.collect { modelPath ->
-                if (modelPath != null) {
-                    val file = File(modelPath)
-                    if (file.exists()) {
-                        val deleted = file.delete()
-                        Log.i(TAG, "Model file deleted=$deleted at $modelPath")
-                    }
+            // 1. Cancel WorkManager job — clears SUCCEEDED/FAILED entry so
+            //    the next scheduleDownload() isn't blocked by ExistingWorkPolicy.KEEP
+            modelDownloadScheduler.cancelDownload()
+
+            // 2. Delete the model file from disk (one-shot read, no infinite collect)
+            val modelPath = modelRepository.downloadedModelPath
+                .firstOrNull()
+            if (modelPath != null) {
+                val file = File(modelPath)
+                if (file.exists()) {
+                    val deleted = file.delete()
+                    Log.i(TAG, "Model file deleted=$deleted at $modelPath")
+                } else {
+                    Log.w(TAG, "Model file not found at $modelPath — already deleted?")
                 }
-                // Clear DataStore state regardless of file existence
-                modelRepository.clearModel()
-                Log.i(TAG, "Model state cleared from DataStore")
-                return@collect
             }
+
+            // 3. Clear DataStore state — downloadState → NONE, path → null
+            modelRepository.clearModel()
+            Log.i(TAG, "Model state cleared from DataStore")
+
+            // 4. Clear in-memory VectorIndex so the AI search banner reappears
+            //    immediately without requiring an app restart
+            vectorIndex.clear()
+            Log.i(TAG, "VectorIndex cleared — AI search banner will reappear")
         }
     }
 }
