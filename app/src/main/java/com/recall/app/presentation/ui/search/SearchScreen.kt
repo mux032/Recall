@@ -4,7 +4,19 @@ import android.util.Log
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.focusable
-import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.material.icons.filled.Download
 import androidx.compose.foundation.lazy.staggeredgrid.LazyVerticalStaggeredGrid
 import androidx.compose.foundation.lazy.staggeredgrid.StaggeredGridCells
 import androidx.compose.foundation.lazy.staggeredgrid.items as staggeredItems
@@ -40,10 +52,12 @@ private const val TAG = "SearchFlow"
 fun SearchScreen(
     onBackClick: () -> Unit,
     onScreenshotClick: (String) -> Unit,
+    onSettingsClick: () -> Unit = {},
     viewModel: SearchViewModel = hiltViewModel()
 ) {
     val state by viewModel.state.collectAsState()
     val searchQuery by viewModel.searchQuery.collectAsState()
+    val isVectorIndexReady by viewModel.isVectorIndexReady.collectAsState()
     val focusRequester = remember { FocusRequester() }
 
     // Log search query changes for debugging
@@ -85,11 +99,17 @@ fun SearchScreen(
         },
         containerColor = MaterialTheme.colorScheme.surface
     ) { paddingValues ->
-        Box(
+        Column(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(paddingValues)
         ) {
+            // AI search unavailable banner — shown when no model is downloaded
+            if (!isVectorIndexReady) {
+                AiSearchUnavailableBanner(onSettingsClick = onSettingsClick)
+            }
+
+            Box(modifier = Modifier.fillMaxSize()) {
             when (val currentState = state) {
                 is SearchState.Idle -> {
                     Text(
@@ -132,6 +152,57 @@ fun SearchScreen(
                         modifier = Modifier.align(Alignment.Center)
                     )
                 }
+            }
+            } // end Box
+        } // end Column
+    }
+}
+
+/**
+ * Banner shown in [SearchScreen] when the vector index is not ready (no model downloaded).
+ * Informs the user that AI semantic search is unavailable and provides a shortcut to Settings.
+ *
+ * FTS (keyword) search continues to work normally below this banner.
+ * The banner disappears automatically once the model is downloaded and the index is bootstrapped.
+ */
+@Composable
+internal fun AiSearchUnavailableBanner(
+    onSettingsClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    androidx.compose.material3.Surface(
+        modifier = modifier.fillMaxWidth(),
+        color = MaterialTheme.colorScheme.secondaryContainer,
+        tonalElevation = 2.dp
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 10.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(
+                imageVector = Icons.Default.Download,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSecondaryContainer,
+                modifier = Modifier.size(20.dp)
+            )
+            androidx.compose.material3.Text(
+                text = "AI search unavailable — download the model in Settings",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSecondaryContainer,
+                modifier = Modifier.weight(1f)
+            )
+            androidx.compose.material3.TextButton(
+                onClick = onSettingsClick,
+                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
+            ) {
+                androidx.compose.material3.Text(
+                    text = "Settings",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.secondary
+                )
             }
         }
     }
