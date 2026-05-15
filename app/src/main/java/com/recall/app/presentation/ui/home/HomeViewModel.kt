@@ -14,6 +14,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
@@ -89,6 +90,23 @@ class HomeViewModel @Inject constructor(
         started = SharingStarted.WhileSubscribed(5000),
         initialValue = emptyList()
     )
+
+    /**
+     * Screenshots grouped into timeline sections (Today, Yesterday, This Week, etc.),
+     * ready for direct consumption by [HomeScreen].
+     *
+     * Derived from [screenshots] via [buildTimelineSections] — the grouping, deduplication,
+     * sorting, and sub-label computation all happen here in the ViewModel rather than
+     * inside a `remember {}` block in the Composable, improving testability and reducing
+     * unnecessary recompositions.
+     */
+    val timelineSections: StateFlow<List<TimelineSection>> = screenshots
+        .map { buildTimelineSections(it) }
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5000),
+            initialValue = emptyList()
+        )
 
     // -----------------------------------------------------------------------
     // Search history
