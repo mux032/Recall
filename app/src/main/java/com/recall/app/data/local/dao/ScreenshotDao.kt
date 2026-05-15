@@ -102,15 +102,16 @@ interface ScreenshotDao {
     suspend fun searchFts(query: String): List<ScreenshotEntity>
 
     /**
-     * Rebuild the FTS index by updating all OCR texts.
-     * This is needed after destructive migrations or if FTS index gets corrupted.
+     * Rebuild the FTS index from the content table.
+     * This is needed after destructive migrations or if the FTS index gets out of sync.
+     *
+     * Uses the FTS4 'rebuild' command which re-reads the entire content table
+     * and reconstructs the FTS index. The previous UPDATE query was incorrect —
+     * updating `screenshots` does fire the AFTER_UPDATE trigger which inserts into
+     * `screenshots_fts`, but a dedicated rebuild is cleaner and more reliable.
      */
-    @Query("""
-        UPDATE screenshots
-        SET ocrText = ocrText
-        WHERE ocrText IS NOT NULL AND ocrText != ''
-    """)
-    suspend fun rebuildFtsIndex(): Int
+    @Query("INSERT INTO screenshots_fts(screenshots_fts) VALUES('rebuild')")
+    suspend fun rebuildFtsIndex()
 
     /**
      * Insert with IGNORE strategy to prevent crashes on duplicate filePath.
