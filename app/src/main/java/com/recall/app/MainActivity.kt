@@ -94,7 +94,22 @@ class MainActivity : ComponentActivity() {
     private fun startInitialDeepScan() {
         val scanRequest = OneTimeWorkRequestBuilder<ScanExistingWorker>().build()
         val ocrRequest = OneTimeWorkRequestBuilder<com.recall.app.data.worker.BackgroundOcrWorker>().build()
-        
-        WorkManager.getInstance(this).beginWith(scanRequest).then(ocrRequest).enqueue()
+
+        // Use beginUniqueWork so duplicate calls (permission grant + LaunchedEffect re-trigger)
+        // never spawn more than one scan→OCR chain at a time. KEEP means if a chain is already
+        // running or enqueued, the new request is silently discarded.
+        WorkManager.getInstance(this)
+            .beginUniqueWork(
+                INITIAL_SCAN_WORK_NAME,
+                androidx.work.ExistingWorkPolicy.KEEP,
+                scanRequest
+            )
+            .then(ocrRequest)
+            .enqueue()
+    }
+
+    companion object {
+        // Internal so tests can reference it as a regression guard
+        internal const val INITIAL_SCAN_WORK_NAME = "initial_scan_ocr_chain"
     }
 }
