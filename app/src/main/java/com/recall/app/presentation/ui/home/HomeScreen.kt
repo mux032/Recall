@@ -43,8 +43,6 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextField
-import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -60,13 +58,12 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.foundation.isSystemInDarkTheme
-import androidx.compose.foundation.text.KeyboardActions
-import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
@@ -75,8 +72,8 @@ import coil.request.ImageRequest
 import androidx.navigation.NavBackStackEntry
 import com.recall.app.domain.model.Screenshot
 import com.recall.app.domain.model.ScreenshotFilter
+import com.recall.app.presentation.ui.components.RecallSearchBar
 import com.recall.app.presentation.ui.theme.Inter
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.time.Instant
 import java.time.LocalDate
@@ -113,10 +110,11 @@ fun HomeScreen(
     val selectedFilter by viewModel.selectedFilter.collectAsState()
     val isLoadingMore by viewModel.isLoadingMore.collectAsState()
     val allPagesLoaded by viewModel.allPagesLoaded.collectAsState()
-    var searchQuery by remember { mutableStateOf("") }
+    var searchQuery by remember { mutableStateOf(TextFieldValue("")) }
     var isSearchBarFocused by remember { mutableStateOf(false) }
     val focusManager = LocalFocusManager.current
     val scope = rememberCoroutineScope()
+    val searchInteractionSource = remember { MutableInteractionSource() }
     val listState = androidx.compose.foundation.lazy.rememberLazyListState()
 
     // Trigger loadNextPage() when the user scrolls within 5 items of the bottom
@@ -148,36 +146,41 @@ fun HomeScreen(
                 }
             },
             bottomBar = {
+                // Keep focus state in sync with interactionSource
+                val isFocused by searchInteractionSource.collectIsFocusedAsState()
+                LaunchedEffect(isFocused) { isSearchBarFocused = isFocused }
+
                 Column {
                     // Inline history dropdown — slides up above the search bar when focused
                     SearchHistoryDropdown(
                         isVisible = isSearchBarFocused,
                         historyItems = searchHistory,
                         onItemClick = { query ->
-                            searchQuery = query
+                            searchQuery = TextFieldValue(query, TextRange(query.length))
                             isSearchBarFocused = false
+                            viewModel.addSearchHistory(query)
                             onSearchClick(query)
                         },
                         onItemDelete = { item -> viewModel.deleteHistoryItem(item.id) },
                         onClearAll = { viewModel.clearAllHistory() }
                     )
-                    CuratorBottomSearchBar(
+                    RecallSearchBar(
                         query = searchQuery,
                         onQueryChange = { searchQuery = it },
-                        onFocusChanged = { focused ->
-                            isSearchBarFocused = focused
-                        },
                         onSearch = {
-                            Log.d(TAG, "onSearch called with query: '$searchQuery'")
-                            if (searchQuery.isNotEmpty()) {
-                                Log.d(TAG, "Navigating to SearchScreen with query: '$searchQuery'")
+                            val q = searchQuery.text
+                            Log.d(TAG, "onSearch called with query: '$q'")
+                            if (q.isNotEmpty()) {
+                                Log.d(TAG, "Navigating to SearchScreen with query: '$q'")
                                 isSearchBarFocused = false
-                                viewModel.addSearchHistory(searchQuery)
-                                onSearchClick(searchQuery)
+                                focusManager.clearFocus()
+                                viewModel.addSearchHistory(q)
+                                onSearchClick(q)
                             } else {
                                 Log.w(TAG, "Empty query, not navigating")
                             }
-                        }
+                        },
+                        interactionSource = searchInteractionSource
                     )
                 }
             },
@@ -589,101 +592,6 @@ fun ScreenshotItem(
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis
                 )
-            }
-        }
-    }
-}
-
-@Composable
-fun CuratorBottomSearchBar(
-    query: String,
-    onQueryChange: (String) -> Unit,
-    onSearch: () -> Unit,
-    onFocusChanged: (Boolean) -> Unit = {}
-) {
-    val interactionSource = remember { MutableInteractionSource() }
-    val isFocused by interactionSource.collectIsFocusedAsState()
-
-    LaunchedEffect(isFocused) {
-        onFocusChanged(isFocused)
-    }
-
-    Surface(
-        modifier = Modifier
-            .fillMaxWidth(),
-        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.95f),
-        tonalElevation = 4.dp,
-        shadowElevation = 8.dp
-    ) {
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 16.dp)
-        ) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(56.dp)
-                    .clip(RoundedCornerShape(24.dp))
-                    .background(MaterialTheme.colorScheme.surfaceContainerHighest)
-                    .padding(horizontal = 8.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                // AI Icon
-                Icon(
-                    imageVector = Icons.Default.AutoAwesome,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.size(24.dp)
-                )
-
-                Spacer(modifier = Modifier.width(8.dp))
-
-                // Search Input
-                TextField(
-                    value = query,
-                    onValueChange = onQueryChange,
-                    placeholder = {
-                        Text(
-                            text = "Search your screenshots...",
-                            style = MaterialTheme.typography.bodyLarge,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    },
-                    modifier = Modifier.weight(1f),
-                    interactionSource = interactionSource,
-                    colors = TextFieldDefaults.colors(
-                        focusedContainerColor = Color.Transparent,
-                        unfocusedContainerColor = Color.Transparent,
-                        focusedIndicatorColor = Color.Transparent,
-                        unfocusedIndicatorColor = Color.Transparent,
-                        cursorColor = MaterialTheme.colorScheme.primary
-                    ),
-                    textStyle = MaterialTheme.typography.bodyLarge.copy(fontFamily = Inter),
-                    singleLine = true,
-                    keyboardOptions = KeyboardOptions(
-                        imeAction = ImeAction.Search  // Show Search key on keyboard
-                    ),
-                    keyboardActions = KeyboardActions(
-                        onSearch = {
-                            Log.d(TAG, "TextField onSearch triggered with query: '$query'")
-                            onSearch()
-                        }
-                    )
-                )
-                
-                // Search Button
-                IconButton(
-                    onClick = onSearch,
-                    modifier = Modifier.size(40.dp)
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Search,
-                        contentDescription = "Search",
-                        tint = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.size(24.dp)
-                    )
-                }
             }
         }
     }

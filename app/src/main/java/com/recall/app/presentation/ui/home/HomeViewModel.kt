@@ -5,16 +5,21 @@ import androidx.lifecycle.viewModelScope
 import com.recall.app.domain.model.Screenshot
 import com.recall.app.domain.model.ScreenshotFilter
 import com.recall.app.domain.model.SearchHistoryItem
+import com.recall.app.data.local.ModelDownloadState
+import com.recall.app.data.local.ModelRepository
+import com.recall.app.data.nlp.VectorIndexOptimized
 import com.recall.app.domain.repository.ScreenshotRepository
 import com.recall.app.domain.usecase.searchhistory.AddSearchHistoryUseCase
 import com.recall.app.domain.usecase.searchhistory.ClearSearchHistoryUseCase
 import com.recall.app.domain.usecase.searchhistory.DeleteSearchHistoryUseCase
 import com.recall.app.domain.usecase.searchhistory.GetSearchHistoryUseCase
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
@@ -27,12 +32,17 @@ class HomeViewModel @Inject constructor(
     private val getSearchHistoryUseCase: GetSearchHistoryUseCase,
     private val addSearchHistoryUseCase: AddSearchHistoryUseCase,
     private val deleteSearchHistoryUseCase: DeleteSearchHistoryUseCase,
-    private val clearSearchHistoryUseCase: ClearSearchHistoryUseCase
+    private val clearSearchHistoryUseCase: ClearSearchHistoryUseCase,
+    private val vectorIndex: VectorIndexOptimized,
+    private val modelRepository: ModelRepository
 ) : ViewModel() {
 
     companion object {
         /** 7 days in milliseconds — the window for the RECENT filter. */
         private const val RECENT_WINDOW_MS = 7 * 24 * 60 * 60 * 1000L
+
+        /** Poll interval for vector index readiness check (mirrors SearchViewModel). */
+        private const val VECTOR_INDEX_POLL_INTERVAL_MS = 2_000L
 
         /**
          * Number of screenshots loaded per page.
@@ -120,6 +130,30 @@ class HomeViewModel @Inject constructor(
             started = SharingStarted.WhileSubscribed(5000),
             initialValue = emptyList()
         )
+
+    // -----------------------------------------------------------------------
+    // AI readiness — drives the search bar icon (AutoAwesome vs plain Search)
+    // -----------------------------------------------------------------------
+
+    /**
+     * True when AI semantic search is available (model downloaded or vector index loaded).
+     * Mirrors the same logic in [SearchViewModel] so both screens stay in sync.
+     */
+    val isVectorIndexReady: StateFlow<Boolean> = combine(
+        flow {
+            while (true) {
+                emit(vectorIndex.isReady())
+                delay(VECTOR_INDEX_POLL_INTERVAL_MS)
+            }
+        },
+        modelRepository.downloadState
+    ) { indexReady, downloadState ->
+        indexReady || downloadState == ModelDownloadState.READY
+    }.stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(5_000),
+        initialValue = vectorIndex.isReady()
+    )
 
     // -----------------------------------------------------------------------
     // Initialisation — load first page eagerly

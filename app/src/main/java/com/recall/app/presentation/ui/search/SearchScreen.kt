@@ -1,21 +1,16 @@
 package com.recall.app.presentation.ui.search
 
 import android.util.Log
-import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.foundation.lazy.staggeredgrid.LazyVerticalStaggeredGrid
 import androidx.compose.foundation.lazy.staggeredgrid.StaggeredGridCells
@@ -23,8 +18,6 @@ import androidx.compose.foundation.lazy.staggeredgrid.items as staggeredItems
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.AutoAwesome
-import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -33,15 +26,12 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsFocusedAsState
-import androidx.compose.ui.focus.FocusRequester
-import androidx.compose.ui.focus.focusRequester
+import com.recall.app.presentation.ui.components.RecallSearchBar
 import com.recall.app.presentation.ui.home.SearchHistoryDropdown
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
-import androidx.compose.foundation.text.KeyboardActions
 import androidx.hilt.navigation.compose.hiltViewModel
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
@@ -62,9 +52,7 @@ fun SearchScreen(
     val searchQuery by viewModel.searchQuery.collectAsState()
     val isVectorIndexReady by viewModel.isVectorIndexReady.collectAsState()
     val searchHistory by viewModel.searchHistory.collectAsState()
-    val focusRequester = remember { FocusRequester() }
     val interactionSource = remember { MutableInteractionSource() }
-    val isSearchBarFocused by interactionSource.collectIsFocusedAsState()
 
     // Log search query changes for debugging
     LaunchedEffect(searchQuery) {
@@ -91,10 +79,10 @@ fun SearchScreen(
             )
         },
         bottomBar = {
+            val isFocused by interactionSource.collectIsFocusedAsState()
             Column {
-                // Show history dropdown when bar is focused and query is empty
                 SearchHistoryDropdown(
-                    isVisible = isSearchBarFocused && searchQuery.text.isEmpty(),
+                    isVisible = isFocused && searchQuery.text.isEmpty(),
                     historyItems = searchHistory,
                     onItemClick = { query ->
                         viewModel.onQueryChange(
@@ -104,15 +92,14 @@ fun SearchScreen(
                     onItemDelete = { item -> viewModel.deleteHistoryItem(item.id) },
                     onClearAll = { viewModel.clearAllHistory() }
                 )
-                SearchBottomBar(
+                RecallSearchBar(
                     query = searchQuery,
                     onQueryChange = { viewModel.onQueryChange(it) },
-                    onSearchClick = {
+                    onSearch = {
                         if (searchQuery.text.isNotEmpty()) {
                             viewModel.onQueryChange(searchQuery)
                         }
                     },
-                    focusRequester = focusRequester,
                     interactionSource = interactionSource
                 )
             }
@@ -124,6 +111,21 @@ fun SearchScreen(
                 .fillMaxSize()
                 .padding(paddingValues)
         ) {
+            // Result count label
+            val currentState = state
+            if (currentState is SearchState.Success && searchQuery.text.isNotEmpty()) {
+                Text(
+                    text = if (currentState.results.isEmpty())
+                        "No results for \"${searchQuery.text}\""
+                    else
+                        "${currentState.results.size} result${if (currentState.results.size == 1) "" else "s"} for \"${searchQuery.text}\"",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 0.dp)
+                        .padding(top = 8.dp, bottom = 4.dp)
+                )
+            }
+
             // AI search unavailable banner — shown when no model is downloaded
             if (!isVectorIndexReady) {
                 AiSearchUnavailableBanner(onSettingsClick = onSettingsClick)
@@ -223,102 +225,6 @@ internal fun AiSearchUnavailableBanner(
                     style = MaterialTheme.typography.labelMedium,
                     color = MaterialTheme.colorScheme.secondary
                 )
-            }
-        }
-    }
-}
-
-@Composable
-fun SearchBottomBar(
-    query: TextFieldValue,
-    onQueryChange: (TextFieldValue) -> Unit,
-    onSearchClick: () -> Unit = {},
-    focusRequester: FocusRequester = remember { FocusRequester() },
-    interactionSource: MutableInteractionSource = remember { MutableInteractionSource() }
-) {
-    var focusRequested by remember { mutableStateOf(false) }
-    
-    // Request focus only once when the search bar is first composed
-    LaunchedEffect(focusRequested) {
-        if (!focusRequested) {
-            focusRequester.requestFocus()
-            focusRequested = true
-        }
-    }
-
-    Surface(
-        modifier = Modifier
-            .fillMaxWidth(),
-        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.95f),
-        tonalElevation = 4.dp,
-        shadowElevation = 8.dp
-    ) {
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 16.dp)
-        ) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(56.dp)
-                    .clip(RoundedCornerShape(24.dp))
-                    .background(MaterialTheme.colorScheme.surfaceContainerHighest)
-                    .padding(horizontal = 8.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                // AI Icon
-                Icon(
-                    imageVector = Icons.Default.AutoAwesome,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.size(24.dp)
-                )
-
-                Spacer(modifier = Modifier.width(8.dp))
-
-                // Search Input
-                TextField(
-                    value = query,
-                    onValueChange = onQueryChange,
-                    placeholder = {
-                        Text(
-                            text = "Search your screenshots...",
-                            style = MaterialTheme.typography.bodyLarge,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    },
-                    modifier = Modifier
-                        .weight(1f)
-                        .focusRequester(focusRequester)
-                        .focusable(),
-                    interactionSource = interactionSource,
-                    colors = TextFieldDefaults.colors(
-                        focusedContainerColor = Color.Transparent,
-                        unfocusedContainerColor = Color.Transparent,
-                        focusedIndicatorColor = Color.Transparent,
-                        unfocusedIndicatorColor = Color.Transparent,
-                        cursorColor = MaterialTheme.colorScheme.primary
-                    ),
-                    textStyle = MaterialTheme.typography.bodyLarge,
-                    singleLine = true,
-                    keyboardActions = KeyboardActions(
-                        onSearch = { onSearchClick() }
-                    )
-                )
-
-                // Search Button
-                IconButton(
-                    onClick = onSearchClick,
-                    modifier = Modifier.size(40.dp)
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Search,
-                        contentDescription = "Search",
-                        tint = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.size(24.dp)
-                    )
-                }
             }
         }
     }

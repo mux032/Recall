@@ -5,6 +5,9 @@ import com.recall.app.domain.model.ScreenshotFilter
 import com.recall.app.domain.repository.ScreenshotRepository
 import java.time.LocalDate
 import java.time.ZoneId
+import com.recall.app.data.local.ModelDownloadState
+import com.recall.app.data.local.ModelRepository
+import com.recall.app.data.nlp.VectorIndexOptimized
 import com.recall.app.domain.usecase.searchhistory.AddSearchHistoryUseCase
 import com.recall.app.domain.usecase.searchhistory.ClearSearchHistoryUseCase
 import com.recall.app.domain.usecase.searchhistory.DeleteSearchHistoryUseCase
@@ -39,6 +42,8 @@ class HomeViewModelTest {
     private lateinit var addSearchHistoryUseCase: AddSearchHistoryUseCase
     private lateinit var deleteSearchHistoryUseCase: DeleteSearchHistoryUseCase
     private lateinit var clearSearchHistoryUseCase: ClearSearchHistoryUseCase
+    private lateinit var vectorIndex: VectorIndexOptimized
+    private lateinit var modelRepository: ModelRepository
     private lateinit var viewModel: HomeViewModel
 
     private val testDispatcher = StandardTestDispatcher()
@@ -51,8 +56,12 @@ class HomeViewModelTest {
         addSearchHistoryUseCase = mock()
         deleteSearchHistoryUseCase = mock()
         clearSearchHistoryUseCase = mock()
+        vectorIndex = mock()
+        modelRepository = mock()
 
         whenever(getSearchHistoryUseCase()).thenReturn(flowOf(emptyList()))
+        whenever(vectorIndex.isReady()).thenReturn(false)
+        whenever(modelRepository.downloadState).thenReturn(flowOf(ModelDownloadState.NONE))
     }
 
     @After
@@ -423,12 +432,51 @@ class HomeViewModelTest {
         verify(addSearchHistoryUseCase, times(2)).invoke(any())
     }
 
+    // -----------------------------------------------------------------------
+    // isVectorIndexReady — AI icon indicator on search bar
+    // -----------------------------------------------------------------------
+
+    @Test
+    fun `isVectorIndexReady initial value is false when index not ready and model not downloaded`() = runTest {
+        whenever(screenshotRepository.getScreenshotPage(any(), any())).thenReturn(emptyList())
+        whenever(vectorIndex.isReady()).thenReturn(false)
+        whenever(modelRepository.downloadState).thenReturn(flowOf(ModelDownloadState.NONE))
+        val vm = buildViewModel()
+        assertFalse(vm.isVectorIndexReady.value)
+    }
+
+    @Test
+    fun `isVectorIndexReady is true when vector index reports ready`() = runTest {
+        whenever(screenshotRepository.getScreenshotPage(any(), any())).thenReturn(emptyList())
+        whenever(vectorIndex.isReady()).thenReturn(true)
+        whenever(modelRepository.downloadState).thenReturn(flowOf(ModelDownloadState.NONE))
+        val vm = buildViewModel()
+        val collected = mutableListOf<Boolean>()
+        backgroundScope.launch { vm.isVectorIndexReady.collect { collected.add(it) } }
+        testScheduler.advanceTimeBy(100)
+        assertTrue("Expected isVectorIndexReady to emit true", collected.contains(true))
+    }
+
+    @Test
+    fun `isVectorIndexReady is true when model download state is READY`() = runTest {
+        whenever(screenshotRepository.getScreenshotPage(any(), any())).thenReturn(emptyList())
+        whenever(vectorIndex.isReady()).thenReturn(false)
+        whenever(modelRepository.downloadState).thenReturn(flowOf(ModelDownloadState.READY))
+        val vm = buildViewModel()
+        val collected = mutableListOf<Boolean>()
+        backgroundScope.launch { vm.isVectorIndexReady.collect { collected.add(it) } }
+        testScheduler.advanceTimeBy(100)
+        assertTrue("Expected isVectorIndexReady to emit true when model is READY", collected.contains(true))
+    }
+
     private fun buildViewModel() = HomeViewModel(
         screenshotRepository,
         getSearchHistoryUseCase,
         addSearchHistoryUseCase,
         deleteSearchHistoryUseCase,
-        clearSearchHistoryUseCase
+        clearSearchHistoryUseCase,
+        vectorIndex,
+        modelRepository
     )
 
     private fun buildScreenshots(count: Int, startId: Int = 0) = (0 until count).map {
