@@ -7,6 +7,9 @@ import com.recall.app.data.local.ModelRepository
 import com.recall.app.data.nlp.VectorIndexOptimized
 import com.recall.app.domain.usecase.SearchScreenshotsUseCase
 import com.recall.app.domain.usecase.searchhistory.AddSearchHistoryUseCase
+import com.recall.app.domain.usecase.searchhistory.ClearSearchHistoryUseCase
+import com.recall.app.domain.usecase.searchhistory.DeleteSearchHistoryUseCase
+import com.recall.app.domain.usecase.searchhistory.GetSearchHistoryUseCase
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.flowOf
@@ -40,6 +43,9 @@ class SearchViewModelTest {
     private lateinit var vectorIndex: VectorIndexOptimized
     private lateinit var searchUseCase: SearchScreenshotsUseCase
     private lateinit var addHistoryUseCase: AddSearchHistoryUseCase
+    private lateinit var getHistoryUseCase: GetSearchHistoryUseCase
+    private lateinit var deleteHistoryUseCase: DeleteSearchHistoryUseCase
+    private lateinit var clearHistoryUseCase: ClearSearchHistoryUseCase
     private lateinit var modelRepository: ModelRepository
 
     private val testDispatcher = StandardTestDispatcher()
@@ -50,7 +56,11 @@ class SearchViewModelTest {
         vectorIndex = mock()
         searchUseCase = mock()
         addHistoryUseCase = mock()
+        getHistoryUseCase = mock()
+        deleteHistoryUseCase = mock()
+        clearHistoryUseCase = mock()
         modelRepository = mock()
+        whenever(getHistoryUseCase()).thenReturn(flowOf(emptyList()))
         whenever(modelRepository.downloadState).thenReturn(flowOf(ModelDownloadState.NONE))
     }
 
@@ -169,6 +179,9 @@ class SearchViewModelTest {
         savedStateHandle = SavedStateHandle(mapOf("query" to query)),
         searchScreenshotsUseCase = searchUseCase,
         addSearchHistoryUseCase = addHistoryUseCase,
+        getSearchHistoryUseCase = getHistoryUseCase,
+        deleteSearchHistoryUseCase = deleteHistoryUseCase,
+        clearSearchHistoryUseCase = clearHistoryUseCase,
         vectorIndex = vectorIndex,
         modelRepository = modelRepository
     )

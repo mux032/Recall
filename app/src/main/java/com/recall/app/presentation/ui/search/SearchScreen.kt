@@ -31,8 +31,11 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import com.recall.app.presentation.ui.home.SearchHistoryDropdown
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -58,7 +61,10 @@ fun SearchScreen(
     val state by viewModel.state.collectAsState()
     val searchQuery by viewModel.searchQuery.collectAsState()
     val isVectorIndexReady by viewModel.isVectorIndexReady.collectAsState()
+    val searchHistory by viewModel.searchHistory.collectAsState()
     val focusRequester = remember { FocusRequester() }
+    val interactionSource = remember { MutableInteractionSource() }
+    val isSearchBarFocused by interactionSource.collectIsFocusedAsState()
 
     // Log search query changes for debugging
     LaunchedEffect(searchQuery) {
@@ -85,17 +91,31 @@ fun SearchScreen(
             )
         },
         bottomBar = {
-            SearchBottomBar(
-                query = searchQuery,
-                onQueryChange = { viewModel.onQueryChange(it) },
-                onSearchClick = {
-                    // Trigger search with current query
-                    if (searchQuery.text.isNotEmpty()) {
-                        viewModel.onQueryChange(searchQuery)
-                    }
-                },
-                focusRequester = focusRequester
-            )
+            Column {
+                // Show history dropdown when bar is focused and query is empty
+                SearchHistoryDropdown(
+                    isVisible = isSearchBarFocused && searchQuery.text.isEmpty(),
+                    historyItems = searchHistory,
+                    onItemClick = { query ->
+                        viewModel.onQueryChange(
+                            TextFieldValue(query, androidx.compose.ui.text.TextRange(query.length))
+                        )
+                    },
+                    onItemDelete = { item -> viewModel.deleteHistoryItem(item.id) },
+                    onClearAll = { viewModel.clearAllHistory() }
+                )
+                SearchBottomBar(
+                    query = searchQuery,
+                    onQueryChange = { viewModel.onQueryChange(it) },
+                    onSearchClick = {
+                        if (searchQuery.text.isNotEmpty()) {
+                            viewModel.onQueryChange(searchQuery)
+                        }
+                    },
+                    focusRequester = focusRequester,
+                    interactionSource = interactionSource
+                )
+            }
         },
         containerColor = MaterialTheme.colorScheme.surface
     ) { paddingValues ->
@@ -213,7 +233,8 @@ fun SearchBottomBar(
     query: TextFieldValue,
     onQueryChange: (TextFieldValue) -> Unit,
     onSearchClick: () -> Unit = {},
-    focusRequester: FocusRequester = remember { FocusRequester() }
+    focusRequester: FocusRequester = remember { FocusRequester() },
+    interactionSource: MutableInteractionSource = remember { MutableInteractionSource() }
 ) {
     var focusRequested by remember { mutableStateOf(false) }
     
@@ -271,6 +292,7 @@ fun SearchBottomBar(
                         .weight(1f)
                         .focusRequester(focusRequester)
                         .focusable(),
+                    interactionSource = interactionSource,
                     colors = TextFieldDefaults.colors(
                         focusedContainerColor = Color.Transparent,
                         unfocusedContainerColor = Color.Transparent,

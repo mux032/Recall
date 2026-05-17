@@ -10,7 +10,11 @@ import com.recall.app.data.local.ModelDownloadState
 import com.recall.app.data.local.ModelRepository
 import com.recall.app.data.nlp.VectorIndexOptimized
 import com.recall.app.domain.usecase.SearchScreenshotsUseCase
+import com.recall.app.domain.model.SearchHistoryItem
 import com.recall.app.domain.usecase.searchhistory.AddSearchHistoryUseCase
+import com.recall.app.domain.usecase.searchhistory.ClearSearchHistoryUseCase
+import com.recall.app.domain.usecase.searchhistory.DeleteSearchHistoryUseCase
+import com.recall.app.domain.usecase.searchhistory.GetSearchHistoryUseCase
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
@@ -41,6 +45,9 @@ class SearchViewModel @Inject constructor(
     savedStateHandle: SavedStateHandle,
     private val searchScreenshotsUseCase: SearchScreenshotsUseCase,
     private val addSearchHistoryUseCase: AddSearchHistoryUseCase,
+    private val getSearchHistoryUseCase: GetSearchHistoryUseCase,
+    private val deleteSearchHistoryUseCase: DeleteSearchHistoryUseCase,
+    private val clearSearchHistoryUseCase: ClearSearchHistoryUseCase,
     private val vectorIndex: VectorIndexOptimized,
     private val modelRepository: ModelRepository
 ) : ViewModel() {
@@ -88,6 +95,22 @@ class SearchViewModel @Inject constructor(
     // for cursor position control. This separation is intentional.
     private val _searchQuery = MutableStateFlow(TextFieldValue(""))
     val searchQuery: StateFlow<TextFieldValue> = _searchQuery.asStateFlow()
+
+    /** Recent search history for the inline dropdown on the Search screen. */
+    val searchHistory: StateFlow<List<SearchHistoryItem>> = getSearchHistoryUseCase()
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5_000),
+            initialValue = emptyList()
+        )
+
+    fun deleteHistoryItem(id: String) {
+        viewModelScope.launch { deleteSearchHistoryUseCase(id) }
+    }
+
+    fun clearAllHistory() {
+        viewModelScope.launch { clearSearchHistoryUseCase() }
+    }
 
     private var searchJob: Job? = null
 

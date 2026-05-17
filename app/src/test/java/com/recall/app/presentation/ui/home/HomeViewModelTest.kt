@@ -5,6 +5,7 @@ import com.recall.app.domain.model.ScreenshotFilter
 import com.recall.app.domain.repository.ScreenshotRepository
 import java.time.LocalDate
 import java.time.ZoneId
+import com.recall.app.domain.usecase.searchhistory.AddSearchHistoryUseCase
 import com.recall.app.domain.usecase.searchhistory.ClearSearchHistoryUseCase
 import com.recall.app.domain.usecase.searchhistory.DeleteSearchHistoryUseCase
 import com.recall.app.domain.usecase.searchhistory.GetSearchHistoryUseCase
@@ -35,6 +36,7 @@ class HomeViewModelTest {
 
     private lateinit var screenshotRepository: ScreenshotRepository
     private lateinit var getSearchHistoryUseCase: GetSearchHistoryUseCase
+    private lateinit var addSearchHistoryUseCase: AddSearchHistoryUseCase
     private lateinit var deleteSearchHistoryUseCase: DeleteSearchHistoryUseCase
     private lateinit var clearSearchHistoryUseCase: ClearSearchHistoryUseCase
     private lateinit var viewModel: HomeViewModel
@@ -46,6 +48,7 @@ class HomeViewModelTest {
         Dispatchers.setMain(testDispatcher)
         screenshotRepository = mock()
         getSearchHistoryUseCase = mock()
+        addSearchHistoryUseCase = mock()
         deleteSearchHistoryUseCase = mock()
         clearSearchHistoryUseCase = mock()
 
@@ -379,9 +382,51 @@ class HomeViewModelTest {
     private fun noonToday(): Long =
         LocalDate.now().atTime(12, 0).atZone(ZoneId.systemDefault()).toInstant().toEpochMilli()
 
+    // -----------------------------------------------------------------------
+    // Search history — addSearchHistory, deleteHistoryItem, clearAllHistory
+    // -----------------------------------------------------------------------
+
+    @Test
+    fun `addSearchHistory delegates to AddSearchHistoryUseCase`() = runTest {
+        whenever(screenshotRepository.getScreenshotPage(any(), any())).thenReturn(emptyList())
+        viewModel = buildViewModel()
+        viewModel.addSearchHistory("cats")
+        advanceUntilIdle()
+        verify(addSearchHistoryUseCase).invoke("cats")
+    }
+
+    @Test
+    fun `deleteHistoryItem delegates to DeleteSearchHistoryUseCase`() = runTest {
+        whenever(screenshotRepository.getScreenshotPage(any(), any())).thenReturn(emptyList())
+        viewModel = buildViewModel()
+        viewModel.deleteHistoryItem("abc-123")
+        advanceUntilIdle()
+        verify(deleteSearchHistoryUseCase).invoke("abc-123")
+    }
+
+    @Test
+    fun `clearAllHistory delegates to ClearSearchHistoryUseCase`() = runTest {
+        whenever(screenshotRepository.getScreenshotPage(any(), any())).thenReturn(emptyList())
+        viewModel = buildViewModel()
+        viewModel.clearAllHistory()
+        advanceUntilIdle()
+        verify(clearSearchHistoryUseCase).invoke()
+    }
+
+    @Test
+    fun `addSearchHistory called twice records both queries`() = runTest {
+        whenever(screenshotRepository.getScreenshotPage(any(), any())).thenReturn(emptyList())
+        viewModel = buildViewModel()
+        viewModel.addSearchHistory("dogs")
+        viewModel.addSearchHistory("cats")
+        advanceUntilIdle()
+        verify(addSearchHistoryUseCase, times(2)).invoke(any())
+    }
+
     private fun buildViewModel() = HomeViewModel(
         screenshotRepository,
         getSearchHistoryUseCase,
+        addSearchHistoryUseCase,
         deleteSearchHistoryUseCase,
         clearSearchHistoryUseCase
     )

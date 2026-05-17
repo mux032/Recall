@@ -6,6 +6,7 @@ import com.recall.app.domain.model.Screenshot
 import com.recall.app.domain.model.ScreenshotFilter
 import com.recall.app.domain.model.SearchHistoryItem
 import com.recall.app.domain.repository.ScreenshotRepository
+import com.recall.app.domain.usecase.searchhistory.AddSearchHistoryUseCase
 import com.recall.app.domain.usecase.searchhistory.ClearSearchHistoryUseCase
 import com.recall.app.domain.usecase.searchhistory.DeleteSearchHistoryUseCase
 import com.recall.app.domain.usecase.searchhistory.GetSearchHistoryUseCase
@@ -24,6 +25,7 @@ import javax.inject.Inject
 class HomeViewModel @Inject constructor(
     private val screenshotRepository: ScreenshotRepository,
     private val getSearchHistoryUseCase: GetSearchHistoryUseCase,
+    private val addSearchHistoryUseCase: AddSearchHistoryUseCase,
     private val deleteSearchHistoryUseCase: DeleteSearchHistoryUseCase,
     private val clearSearchHistoryUseCase: ClearSearchHistoryUseCase
 ) : ViewModel() {
@@ -180,6 +182,12 @@ class HomeViewModel @Inject constructor(
             filter == ScreenshotFilter.ALL -> ScreenshotFilter.ALL
             _selectedFilter.value == filter -> ScreenshotFilter.ALL
             else -> filter
+        }
+    }
+
+    fun addSearchHistory(query: String) {
+        viewModelScope.launch {
+            addSearchHistoryUseCase(query)
         }
     }
 
