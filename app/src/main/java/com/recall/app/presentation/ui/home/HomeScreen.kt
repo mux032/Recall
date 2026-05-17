@@ -30,6 +30,11 @@ import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsFocusedAsState
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -51,8 +56,6 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.focus.FocusRequester
-import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -111,7 +114,8 @@ fun HomeScreen(
     val isLoadingMore by viewModel.isLoadingMore.collectAsState()
     val allPagesLoaded by viewModel.allPagesLoaded.collectAsState()
     var searchQuery by remember { mutableStateOf("") }
-    var isHistoryDrawerVisible by remember { mutableStateOf(false) }
+    var isSearchBarFocused by remember { mutableStateOf(false) }
+    val focusManager = LocalFocusManager.current
     val scope = rememberCoroutineScope()
     val listState = androidx.compose.foundation.lazy.rememberLazyListState()
 
@@ -135,7 +139,6 @@ fun HomeScreen(
                 Column {
                     Spacer(modifier = Modifier.height(16.dp))
                     CuratorTopAppBar(
-                        onHistoryClick = { isHistoryDrawerVisible = true },
                         onSettingsClick = onSettingsClick
                     )
                     CuratorSmartFilters(
@@ -145,23 +148,50 @@ fun HomeScreen(
                 }
             },
             bottomBar = {
-                CuratorBottomSearchBar(
-                    query = searchQuery,
-                    onQueryChange = { searchQuery = it },
-                    onSearch = {
-                        // This is called when Enter is pressed
-                        Log.d(TAG, "onSearch called with query: '$searchQuery'")
-                        if (searchQuery.isNotEmpty()) {
-                            Log.d(TAG, "Navigating to SearchScreen with query: '$searchQuery'")
-                            onSearchClick(searchQuery)
-                        } else {
-                            Log.w(TAG, "Empty query, not navigating")
+                Column {
+                    // Inline history dropdown — slides up above the search bar when focused
+                    SearchHistoryDropdown(
+                        isVisible = isSearchBarFocused,
+                        historyItems = searchHistory,
+                        onItemClick = { query ->
+                            searchQuery = query
+                            isSearchBarFocused = false
+                            onSearchClick(query)
+                        },
+                        onItemDelete = { item -> viewModel.deleteHistoryItem(item.id) },
+                        onClearAll = { viewModel.clearAllHistory() }
+                    )
+                    CuratorBottomSearchBar(
+                        query = searchQuery,
+                        onQueryChange = { searchQuery = it },
+                        onFocusChanged = { focused ->
+                            isSearchBarFocused = focused
+                        },
+                        onSearch = {
+                            Log.d(TAG, "onSearch called with query: '$searchQuery'")
+                            if (searchQuery.isNotEmpty()) {
+                                Log.d(TAG, "Navigating to SearchScreen with query: '$searchQuery'")
+                                isSearchBarFocused = false
+                                viewModel.addSearchHistory(searchQuery)
+                                onSearchClick(searchQuery)
+                            } else {
+                                Log.w(TAG, "Empty query, not navigating")
+                            }
                         }
-                    }
-                )
+                    )
+                }
             },
             containerColor = MaterialTheme.colorScheme.surface
         ) { paddingValues ->
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .pointerInput(Unit) {
+                        detectTapGestures {
+                            focusManager.clearFocus()
+                        }
+                    }
+            ) {
             if (screenshots.isEmpty()) {
                 Box(
                     modifier = Modifier
@@ -255,39 +285,14 @@ fun HomeScreen(
                     }
                 }
             }
+            } // end tap-intercepting Box
         }
 
-        // Search History Drawer
-        SearchHistoryDrawer(
-            isVisible = isHistoryDrawerVisible,
-            onDismissRequest = { isHistoryDrawerVisible = false },
-            historyItems = searchHistory,
-            onHistoryItemClick = { item ->
-                // Navigate to search with this query
-                onSearchClick(item.query)
-                isHistoryDrawerVisible = false
-            },
-            onHistoryItemDelete = { item ->
-                // Delete single history item
-                // Note: Will be wired to ViewModel in next iteration
-                scope.launch {
-                    viewModel.deleteHistoryItem(item.id)
-                }
-            },
-            onClearAllHistory = {
-                // Clear all history
-                // Note: Will be wired to ViewModel in next iteration
-                scope.launch {
-                    viewModel.clearAllHistory()
-                }
-            }
-        )
     }
 }
 
 @Composable
 fun CuratorTopAppBar(
-    onHistoryClick: () -> Unit,
     onSettingsClick: () -> Unit
 ) {
     Surface(
@@ -304,34 +309,13 @@ fun CuratorTopAppBar(
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(12.dp)
-            ) {
-                // History Button
-                IconButton(
-                    onClick = onHistoryClick,
-                    modifier = Modifier
-                        .size(40.dp)
-                        .clip(CircleShape),
-                    content = {
-                        Icon(
-                            imageVector = Icons.Default.History,
-                            contentDescription = "History",
-                            tint = MaterialTheme.colorScheme.onSurface,
-                            modifier = Modifier.size(24.dp)
-                        )
-                    }
-                )
-
-                // Title
-                Text(
-                    text = "Recall",
-                    style = MaterialTheme.typography.titleLarge,
-                    color = MaterialTheme.colorScheme.primary,
-                    fontWeight = FontWeight.ExtraBold
-                )
-            }
+            // Title
+            Text(
+                text = "Recall",
+                style = MaterialTheme.typography.titleLarge,
+                color = MaterialTheme.colorScheme.primary,
+                fontWeight = FontWeight.ExtraBold
+            )
 
             // Settings Button
             IconButton(
@@ -614,13 +598,14 @@ fun ScreenshotItem(
 fun CuratorBottomSearchBar(
     query: String,
     onQueryChange: (String) -> Unit,
-    onSearch: () -> Unit
+    onSearch: () -> Unit,
+    onFocusChanged: (Boolean) -> Unit = {}
 ) {
-    val focusRequester = remember { FocusRequester() }
+    val interactionSource = remember { MutableInteractionSource() }
+    val isFocused by interactionSource.collectIsFocusedAsState()
 
-    // Request focus when the search bar is composed
-    LaunchedEffect(Unit) {
-        focusRequester.requestFocus()
+    LaunchedEffect(isFocused) {
+        onFocusChanged(isFocused)
     }
 
     Surface(
@@ -665,10 +650,8 @@ fun CuratorBottomSearchBar(
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     },
-                    modifier = Modifier
-                        .weight(1f)
-                        .focusRequester(focusRequester)
-                        .focusable(),
+                    modifier = Modifier.weight(1f),
+                    interactionSource = interactionSource,
                     colors = TextFieldDefaults.colors(
                         focusedContainerColor = Color.Transparent,
                         unfocusedContainerColor = Color.Transparent,
