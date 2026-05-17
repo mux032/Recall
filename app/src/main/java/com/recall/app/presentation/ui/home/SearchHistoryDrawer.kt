@@ -19,6 +19,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -48,11 +49,12 @@ fun SearchHistoryDrawer(
         )
     ) {
         Box {
-            // Scrim (Backdrop)
+            // Scrim (Backdrop) — higher opacity in dark mode for perceptible contrast
+            val isDark = isSystemInDarkTheme()
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .background(Color.Black.copy(alpha = 0.4f))
+                    .background(Color.Black.copy(alpha = if (isDark) 0.6f else 0.4f))
                     .clickable(onClick = onDismissRequest)
             )
 

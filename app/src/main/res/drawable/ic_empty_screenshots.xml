@@ -3,25 +3,25 @@
     android:height="200dp"
     android:viewportWidth="200"
     android:viewportHeight="200">
-    <!-- Empty state illustration -->
+    <!-- Empty state illustration — uses theme-aware colorOnSurface -->
     <path
-        android:fillColor="#94A3B8"
+        android:fillColor="?attr/colorOnSurface"
         android:fillAlpha="0.2"
         android:pathData="M100,80m-40,0a40,40 0,1 1,80 0a40,40 0,1 1,-80 0" />
     <path
-        android:fillColor="#94A3B8"
+        android:fillColor="?attr/colorOnSurface"
         android:fillAlpha="0.3"
         android:pathData="M60,100h80v60h-80z" />
     <path
-        android:fillColor="#94A3B8"
+        android:fillColor="?attr/colorOnSurface"
         android:fillAlpha="0.5"
         android:pathData="M70,110l20,15l-20,15z" />
     <path
-        android:fillColor="#94A3B8"
+        android:fillColor="?attr/colorOnSurface"
         android:fillAlpha="0.5"
         android:pathData="M100,130m-5,0a5,5 0,1 1,10 0a5,5 0,1 1,-10 0" />
     <path
-        android:strokeColor="#94A3B8"
+        android:strokeColor="?attr/colorOnSurface"
         android:strokeAlpha="0.5"
         android:strokeWidth="3"
         android:strokeLineCap="round"

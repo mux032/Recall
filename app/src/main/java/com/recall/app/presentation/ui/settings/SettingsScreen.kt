@@ -38,6 +38,7 @@ fun SettingsScreen(
     val downloadState by viewModel.downloadState.collectAsState()
     val downloadProgress by viewModel.downloadProgress.collectAsState()
     val cacheLimitOption by viewModel.cacheLimitOption.collectAsState()
+    val themeMode by viewModel.themeMode.collectAsState()
 
     // Map DeviceProfile → SystemStatus for existing SystemStatusCards composable
     val systemStatus = remember(deviceProfile) {
@@ -100,6 +101,19 @@ fun SettingsScreen(
             contentPadding = PaddingValues(horizontal = 16.dp, vertical = 20.dp),
             verticalArrangement = Arrangement.spacedBy(24.dp)
         ) {
+            // ── Appearance (theme mode) ──────────────────────────────────────
+            item {
+                SettingsSection(
+                    title = "Appearance",
+                    description = "Choose how the app looks"
+                ) {
+                    ThemeModeCard(
+                        currentMode = themeMode,
+                        onModeSelected = { viewModel.setThemeMode(it) }
+                    )
+                }
+            }
+
             // ── AI Search (memory + embedding model) ────────────────────────
             item {
                 SettingsSection(title = "AI Search", description = "Memory and embedding model for on-device search") {
@@ -116,6 +130,73 @@ fun SettingsScreen(
             }
 
 
+        }
+    }
+}
+
+/**
+ * Segmented button row that lets the user pick [ThemeMode.SYSTEM], [ThemeMode.LIGHT],
+ * or [ThemeMode.DARK]. Selection is persisted immediately via [onModeSelected].
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun ThemeModeCard(
+    currentMode: ThemeMode,
+    onModeSelected: (ThemeMode) -> Unit
+) {
+    val options = ThemeMode.entries
+    val icons = listOf(
+        Icons.Filled.BrightnessAuto,
+        Icons.Filled.LightMode,
+        Icons.Filled.DarkMode
+    )
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(16.dp))
+            .background(MaterialTheme.colorScheme.surfaceContainer)
+            .padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Icon(
+                imageVector = Icons.Filled.Palette,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(20.dp)
+            )
+            Text(
+                text = "Theme",
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+        }
+
+        SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+            options.forEachIndexed { index, mode ->
+                SegmentedButton(
+                    selected = currentMode == mode,
+                    onClick = { onModeSelected(mode) },
+                    shape = SegmentedButtonDefaults.itemShape(index = index, count = options.size),
+                    icon = {
+                        Icon(
+                            imageVector = icons[index],
+                            contentDescription = mode.displayName,
+                            modifier = Modifier.size(SegmentedButtonDefaults.IconSize)
+                        )
+                    }
+                ) {
+                    Text(
+                        text = mode.displayName,
+                        style = MaterialTheme.typography.labelMedium
+                    )
+                }
+            }
         }
     }
 }

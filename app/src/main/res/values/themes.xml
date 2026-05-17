@@ -15,12 +15,9 @@
         <!-- Background colors -->
         <!-- Removed hardcoded _light colors so it falls back to DayNight defaults -->
         
-        <!-- Status bar color -->
-        <item name="android:statusBarColor">?android:attr/colorBackground</item>
-        <item name="android:windowLightStatusBar">true</item>
-        
-        <!-- Navigation bar color -->
-        <item name="android:navigationBarColor">?android:attr/colorBackground</item>
+        <!-- Status bar / nav bar: transparent; Compose SideEffect manages icon tint -->
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
     </style>
     
     <!-- Splash Screen Theme -->

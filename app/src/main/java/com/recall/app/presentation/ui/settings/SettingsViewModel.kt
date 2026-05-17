@@ -14,6 +14,7 @@ import com.recall.app.data.local.UserPreferences
 import com.recall.app.data.nlp.VectorIndexOptimized
 import com.recall.app.data.worker.ModelDownloadScheduler
 import com.recall.app.domain.model.CacheLimitOption
+import com.recall.app.domain.model.ThemeMode
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -146,6 +147,23 @@ class SettingsViewModel @Inject constructor(
     /** Persists the user's chosen cache limit option to DataStore. */
     fun setCacheLimitOption(option: CacheLimitOption) {
         viewModelScope.launch { userPreferences.setVectorCacheLimit(option) }
+    }
+
+    // -----------------------------------------------------------------------
+    // Theme mode — sourced from UserPreferences DataStore
+    // -----------------------------------------------------------------------
+
+    /** Current theme mode (SYSTEM / LIGHT / DARK), persisted in DataStore. */
+    val themeMode: StateFlow<ThemeMode> = userPreferences.themeModeFlow
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5_000),
+            initialValue = ThemeMode.SYSTEM
+        )
+
+    /** Persists the user's chosen [ThemeMode] to DataStore. */
+    fun setThemeMode(mode: ThemeMode) {
+        viewModelScope.launch { userPreferences.setThemeMode(mode) }
     }
 
     // -----------------------------------------------------------------------

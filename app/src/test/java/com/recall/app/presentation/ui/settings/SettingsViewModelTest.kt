@@ -11,10 +11,12 @@ import com.recall.app.data.local.UserPreferences
 import com.recall.app.data.nlp.VectorIndexOptimized
 import com.recall.app.data.worker.ModelDownloadScheduler
 import com.recall.app.domain.model.CacheLimitOption
+import com.recall.app.domain.model.ThemeMode
 import com.recall.app.util.MemoryClass
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.resetMain
@@ -86,6 +88,7 @@ class SettingsViewModelTest {
         // Default stubs
         whenever(deviceProfiler.getProfile()).thenReturn(testProfile)
         whenever(userPreferences.vectorCacheLimitFlow).thenReturn(flowOf(CacheLimitOption.AUTO))
+        whenever(userPreferences.themeModeFlow).thenReturn(flowOf(ThemeMode.SYSTEM))
         whenever(modelSelector.selectModel()).thenReturn(testModel)
         whenever(modelRepository.downloadState).thenReturn(flowOf(ModelDownloadState.NONE))
         whenever(modelRepository.downloadProgress).thenReturn(flowOf(0f))
@@ -329,6 +332,68 @@ class SettingsViewModelTest {
         val inOrder = org.mockito.kotlin.inOrder(modelDownloadScheduler, modelRepository)
         inOrder.verify(modelDownloadScheduler).cancelDownload()
         inOrder.verify(modelRepository).clearModel()
+    }
+
+    // -----------------------------------------------------------------------
+    // Theme mode — sourced from UserPreferences
+    // -----------------------------------------------------------------------
+
+    @Test
+    fun `themeMode initial value is SYSTEM from UserPreferences`() {
+        whenever(userPreferences.themeModeFlow).thenReturn(flowOf(ThemeMode.SYSTEM))
+        val viewModel = buildViewModel()
+        assertEquals(ThemeMode.SYSTEM, viewModel.themeMode.value)
+    }
+
+    @Test
+    fun `themeMode emits DARK when UserPreferences emits DARK`() = runTest {
+        whenever(userPreferences.themeModeFlow).thenReturn(flowOf(ThemeMode.DARK))
+        val viewModel = buildViewModel()
+        // Collect one emission from the StateFlow (starts WhileSubscribed, so we collect directly)
+        val collected = mutableListOf<ThemeMode>()
+        val job = launch { viewModel.themeMode.collect { collected.add(it) } }
+        advanceUntilIdle()
+        job.cancel()
+        assert(collected.contains(ThemeMode.DARK)) {
+            "Expected DARK in collected values but got $collected"
+        }
+    }
+
+    @Test
+    fun `themeMode emits LIGHT when UserPreferences emits LIGHT`() = runTest {
+        whenever(userPreferences.themeModeFlow).thenReturn(flowOf(ThemeMode.LIGHT))
+        val viewModel = buildViewModel()
+        val collected = mutableListOf<ThemeMode>()
+        val job = launch { viewModel.themeMode.collect { collected.add(it) } }
+        advanceUntilIdle()
+        job.cancel()
+        assert(collected.contains(ThemeMode.LIGHT)) {
+            "Expected LIGHT in collected values but got $collected"
+        }
+    }
+
+    @Test
+    fun `setThemeMode persists DARK to UserPreferences`() = runTest {
+        val viewModel = buildViewModel()
+        viewModel.setThemeMode(ThemeMode.DARK)
+        advanceUntilIdle()
+        verify(userPreferences).setThemeMode(ThemeMode.DARK)
+    }
+
+    @Test
+    fun `setThemeMode persists LIGHT to UserPreferences`() = runTest {
+        val viewModel = buildViewModel()
+        viewModel.setThemeMode(ThemeMode.LIGHT)
+        advanceUntilIdle()
+        verify(userPreferences).setThemeMode(ThemeMode.LIGHT)
+    }
+
+    @Test
+    fun `setThemeMode persists SYSTEM to UserPreferences`() = runTest {
+        val viewModel = buildViewModel()
+        viewModel.setThemeMode(ThemeMode.SYSTEM)
+        advanceUntilIdle()
+        verify(userPreferences).setThemeMode(ThemeMode.SYSTEM)
     }
 
     private fun buildViewModel() = SettingsViewModel(
