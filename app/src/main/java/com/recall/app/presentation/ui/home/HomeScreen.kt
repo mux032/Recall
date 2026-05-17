@@ -56,6 +56,7 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -505,7 +506,8 @@ fun ScreenshotItem(
                 .fillMaxSize()
         )
 
-        // Gradient Overlay at bottom
+        // Gradient Overlay at bottom — reduced opacity in dark mode
+        val isDark = isSystemInDarkTheme()
         Box(
             modifier = Modifier
                 .fillMaxWidth()
@@ -515,7 +517,7 @@ fun ScreenshotItem(
                     Brush.verticalGradient(
                         colors = listOf(
                             Color.Transparent,
-                            Color.Black.copy(alpha = 0.6f)
+                            Color.Black.copy(alpha = if (isDark) 0.4f else 0.6f)
                         ),
                         startY = 0f,
                         endY = 120f
@@ -586,7 +588,7 @@ fun ScreenshotItem(
                     Text(
                         text = "${screenshot.appName} • ${formatTimeAgo(screenshot.timestamp)}",
                         style = MaterialTheme.typography.labelSmall,
-                        color = Color.White.copy(alpha = 0.7f),
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
@@ -598,7 +600,7 @@ fun ScreenshotItem(
                 Text(
                     text = screenshot.description,
                     style = MaterialTheme.typography.bodyMedium,
-                    color = Color.White,
+                    color = MaterialTheme.colorScheme.onSurface,
                     fontWeight = FontWeight.Bold,
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis

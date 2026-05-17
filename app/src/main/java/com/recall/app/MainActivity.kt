@@ -13,8 +13,11 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkManager
+import androidx.compose.foundation.isSystemInDarkTheme
+import com.recall.app.data.local.UserPreferences
 import com.recall.app.data.repository.PermissionRepository
 import com.recall.app.data.worker.ScanExistingWorker
+import com.recall.app.domain.model.ThemeMode
 import com.recall.app.presentation.ui.permissions.PermissionScreen
 import com.recall.app.presentation.ui.theme.RecallTheme
 import com.recall.app.presentation.ui.navigation.RecallNavGraph
@@ -31,12 +34,22 @@ class MainActivity : ComponentActivity() {
     @Inject
     lateinit var permissionRepository: PermissionRepository
 
+    @Inject
+    lateinit var userPreferences: UserPreferences
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent {
             val scope = rememberCoroutineScope()
-            
-            RecallTheme {
+            val themeMode by userPreferences.themeModeFlow.collectAsState(initial = ThemeMode.SYSTEM)
+            val systemDark = isSystemInDarkTheme()
+            val useDarkTheme = when (themeMode) {
+                ThemeMode.LIGHT -> false
+                ThemeMode.DARK -> true
+                ThemeMode.SYSTEM -> systemDark
+            }
+
+            RecallTheme(useDarkTheme = useDarkTheme) {
                 Surface(
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background

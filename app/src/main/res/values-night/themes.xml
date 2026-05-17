@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Dark mode overrides for Theme.Recall -->
+    <style name="Theme.Recall" parent="Theme.Material3.DayNight.NoActionBar">
+        <!-- Transparent bars: Compose SideEffect sets light-on-dark icon tint -->
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+    </style>
+</resources>

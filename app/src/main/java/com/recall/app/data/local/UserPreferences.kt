@@ -6,6 +6,7 @@ import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
 import com.recall.app.domain.model.CacheLimitOption
+import com.recall.app.domain.model.ThemeMode
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
@@ -26,6 +27,7 @@ class UserPreferences @Inject constructor(
 
         // Preference keys
         val VECTOR_CACHE_LIMIT_KEY = stringPreferencesKey("vector_cache_limit")
+        val THEME_MODE_KEY = stringPreferencesKey("theme_mode")
     }
 
     /**
@@ -83,5 +85,38 @@ class UserPreferences @Inject constructor(
      */
     suspend fun resetVectorCacheLimit() {
         setVectorCacheLimit(CacheLimitOption.AUTO)
+    }
+
+    // ─── Theme mode ───────────────────────────────────────────────────────────
+
+    /**
+     * Flow of the user's selected theme mode.
+     * Emits [ThemeMode.SYSTEM] by default (follows device setting).
+     */
+    val themeModeFlow: Flow<ThemeMode> = dataStore.data
+        .map { preferences ->
+            val value = preferences[THEME_MODE_KEY] ?: ThemeMode.SYSTEM.name
+            ThemeMode.fromString(value)
+        }
+
+    /**
+     * Persist the user's chosen [ThemeMode].
+     * Fails gracefully — logs error but does not throw.
+     */
+    suspend fun setThemeMode(mode: ThemeMode) {
+        try {
+            dataStore.edit { preferences ->
+                preferences[THEME_MODE_KEY] = mode.name
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error setting theme mode in DataStore", e)
+        }
+    }
+
+    /**
+     * Reset theme mode to [ThemeMode.SYSTEM] (default).
+     */
+    suspend fun resetThemeMode() {
+        setThemeMode(ThemeMode.SYSTEM)
     }
 }
