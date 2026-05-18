@@ -4,8 +4,10 @@ import android.util.Log
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import com.recall.app.domain.model.CacheLimitOption
+import com.recall.app.domain.model.IndexingInterval
 import com.recall.app.domain.model.ThemeMode
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
@@ -28,6 +30,8 @@ class UserPreferences @Inject constructor(
         // Preference keys
         val VECTOR_CACHE_LIMIT_KEY = stringPreferencesKey("vector_cache_limit")
         val THEME_MODE_KEY = stringPreferencesKey("theme_mode")
+        val BANNER_DISMISSED_AT_KEY = longPreferencesKey("banner_dismissed_at")
+        val INDEXING_INTERVAL_KEY = stringPreferencesKey("indexing_interval")
     }
 
     /**
@@ -118,5 +122,68 @@ class UserPreferences @Inject constructor(
      */
     suspend fun resetThemeMode() {
         setThemeMode(ThemeMode.SYSTEM)
+    }
+
+    // ─── Processing status banner ─────────────────────────────────────────────
+
+    /**
+     * Epoch-ms timestamp of when the user last dismissed the [ProcessingStatusBanner].
+     * Emits 0L if the banner has never been dismissed.
+     */
+    val bannerDismissedAtFlow: Flow<Long> = dataStore.data
+        .map { preferences -> preferences[BANNER_DISMISSED_AT_KEY] ?: 0L }
+
+    /**
+     * Record the epoch-ms timestamp at which the user dismissed the banner.
+     * The banner will not reappear until a new worker run starts after this time.
+     */
+    suspend fun setBannerDismissedAt(timestampMs: Long) {
+        try {
+            dataStore.edit { preferences ->
+                preferences[BANNER_DISMISSED_AT_KEY] = timestampMs
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error saving banner dismissed timestamp", e)
+        }
+    }
+
+    /**
+     * Clear the dismissed timestamp so the banner can reappear on the next indexing run.
+     */
+    suspend fun resetBannerDismissed() {
+        setBannerDismissedAt(0L)
+    }
+
+    // ─── Indexing interval ────────────────────────────────────────────────────
+
+    /**
+     * Flow of the user-selected background indexing interval.
+     * Defaults to [IndexingInterval.DEFAULT] if never set.
+     */
+    val indexingIntervalFlow: Flow<IndexingInterval> = dataStore.data
+        .map { preferences ->
+            IndexingInterval.fromName(
+                preferences[INDEXING_INTERVAL_KEY] ?: IndexingInterval.DEFAULT.name
+            )
+        }
+
+    /**
+     * Persist the user's chosen [IndexingInterval].
+     * The caller is responsible for re-scheduling the WorkManager periodic worker
+     * after this call so the new interval takes effect.
+     */
+    suspend fun setIndexingInterval(interval: IndexingInterval) {
+        try {
+            dataStore.edit { preferences ->
+                preferences[INDEXING_INTERVAL_KEY] = interval.name
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error saving indexing interval", e)
+        }
+    }
+
+    /** Reset to [IndexingInterval.DEFAULT]. */
+    suspend fun resetIndexingInterval() {
+        setIndexingInterval(IndexingInterval.DEFAULT)
     }
 }

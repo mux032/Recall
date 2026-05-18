@@ -11,6 +11,13 @@ import com.recall.app.data.local.entity.ScreenshotEntity
 import com.recall.app.domain.model.ProcessingState
 import kotlinx.coroutines.flow.Flow
 
+/** Flat projection used by [ScreenshotDao.getIndexingStats]. */
+data class IndexingStatsRaw(
+    val total: Int,
+    val ocrDoneCount: Int,
+    val embeddingDoneCount: Int
+)
+
 @Dao
 interface ScreenshotDao {
     /**
@@ -22,11 +29,69 @@ interface ScreenshotDao {
     fun getAllScreenshots(): Flow<List<ScreenshotEntity>>
 
     /**
+     * Live counts for the [ProcessingStatusBanner] (Issue #106).
+     *
+     * Returns a single-row snapshot of:
+     *   - [IndexingStatsRaw.total]            — all known screenshots
+     *   - [IndexingStatsRaw.ocrDoneCount]     — screenshots with extracted OCR text
+     *   - [IndexingStatsRaw.embeddingDoneCount] — screenshots with AI embedding vector
+     *
+     * Room re-emits whenever any row in the screenshots table changes, so the
+     * banner's progress bars update in real-time as the worker processes each batch.
+     */
+    @Query("""
+        SELECT
+            COUNT(*)                                           AS total,
+            COUNT(CASE WHEN ocrText IS NOT NULL THEN 1 END)   AS ocrDoneCount,
+            COUNT(CASE WHEN embeddingByteArray IS NOT NULL THEN 1 END) AS embeddingDoneCount
+        FROM screenshots
+    """)
+    fun getIndexingStats(): Flow<IndexingStatsRaw>
+
+    /**
      * Returns screenshots created after [since] (epoch ms), ordered newest first.
      * Used to power the RECENT filter (last 7 days = System.currentTimeMillis() - 7 * 86_400_000).
      */
     @Query("SELECT * FROM screenshots WHERE dateCreated >= :since ORDER BY dateCreated DESC")
     fun getRecentScreenshots(since: Long): Flow<List<ScreenshotEntity>>
+
+    /**
+     * Pass 1 — Screenshots that still need OCR (and therefore also need an embedding).
+     *
+     * Returns at most [limit] rows where [ScreenshotEntity.ocrText] is NULL and the
+     * retry counter has not been exhausted, ordered newest-first so the user sees
+     * recent screenshots indexed first.
+     *
+     * Filtering is done in SQL to avoid loading the full table into memory when
+     * there is a large backlog (e.g. 1 742 rows).
+     */
+    @Query("""
+        SELECT * FROM screenshots
+        WHERE ocrText IS NULL
+          AND isUserEdited = 0
+          AND ocrRetryCount < :maxRetries
+        ORDER BY dateCreated DESC
+        LIMIT :limit
+    """)
+    suspend fun getOcrPendingScreenshots(limit: Int, maxRetries: Int): List<ScreenshotEntity>
+
+    /**
+     * Pass 2 — Screenshots where OCR succeeded but embedding generation failed/was skipped.
+     *
+     * Returns at most [limit] rows where [ScreenshotEntity.ocrText] IS NOT NULL but
+     * [ScreenshotEntity.embeddingByteArray] IS NULL and the retry counter is below the
+     * threshold. These rows were left in a half-processed state (OCR done, no vector)
+     * and must be re-attempted with the embedding generator only — no re-OCR needed.
+     */
+    @Query("""
+        SELECT * FROM screenshots
+        WHERE ocrText IS NOT NULL
+          AND embeddingByteArray IS NULL
+          AND embeddingRetryCount < :maxEmbeddingRetries
+        ORDER BY dateCreated DESC
+        LIMIT :limit
+    """)
+    suspend fun getEmbeddingPendingScreenshots(limit: Int, maxEmbeddingRetries: Int): List<ScreenshotEntity>
 
     /**
      * Returns a single page of screenshots ordered newest first.
@@ -44,6 +109,14 @@ interface ScreenshotDao {
      */
     @Query("SELECT COUNT(*) FROM screenshots")
     suspend fun getScreenshotCount(): Int
+
+    /**
+     * Reactive count — Room re-emits whenever the screenshots table changes.
+     * Used by [HomeViewModel] to detect new rows inserted by [ScanExistingWorker]
+     * and trigger a list refresh so screenshots appear immediately.
+     */
+    @Query("SELECT COUNT(*) FROM screenshots")
+    fun getScreenshotCountFlow(): Flow<Int>
 
     @Query("SELECT * FROM screenshots WHERE id = :id")
     suspend fun getScreenshotById(id: String): ScreenshotEntity?
@@ -144,6 +217,19 @@ interface ScreenshotDao {
         WHERE id = :id
     """)
     suspend fun incrementOcrRetryCount(id: String): Int
+
+    /**
+     * Increment the embedding retry count for a screenshot.
+     * Tracked separately from [incrementOcrRetryCount] so transient embedding failures
+     * (model not loaded, OOM) do not exhaust the OCR retry budget on rows that already
+     * have valid OCR text.
+     */
+    @Query("""
+        UPDATE screenshots
+        SET embeddingRetryCount = embeddingRetryCount + 1
+        WHERE id = :id
+    """)
+    suspend fun incrementEmbeddingRetryCount(id: String): Int
 
     /**
      * Reset the OCR retry count for a screenshot after successful processing.

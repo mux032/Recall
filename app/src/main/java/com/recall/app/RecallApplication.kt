@@ -6,12 +6,19 @@ import android.util.Log
 import androidx.hilt.work.HiltWorkerFactory
 import androidx.work.Configuration
 import androidx.work.ExistingPeriodicWorkPolicy
+import androidx.work.ExistingWorkPolicy
+import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
+import com.recall.app.data.local.UserPreferences
 import com.recall.app.data.nlp.VectorIndexBootstrapper
 import com.recall.app.data.service.ScreenshotContentObserver
 import com.recall.app.data.worker.BackgroundOcrWorker
+import com.recall.app.data.worker.ScanExistingWorker
+import com.recall.app.domain.model.IndexingInterval
 import com.recall.app.domain.usecase.EmbeddingGenerator
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.runBlocking
 import dagger.hilt.android.HiltAndroidApp
 import javax.inject.Inject
 import kotlinx.coroutines.CoroutineScope
@@ -24,6 +31,10 @@ class RecallApplication : Application(), Configuration.Provider {
 
     companion object {
         private const val TAG = "RecallApplication"
+
+        /** Shared WorkManager tag applied to every indexing worker.
+         *  Used by [HomeViewModel] to observe and cancel all active indexing in one call. */
+        const val INDEXING_TAG = "recall_indexing"
     }
 
     @Inject
@@ -34,6 +45,9 @@ class RecallApplication : Application(), Configuration.Provider {
 
     @Inject
     lateinit var embeddingGenerator: EmbeddingGenerator
+
+    @Inject
+    lateinit var userPreferences: UserPreferences
 
     private val applicationScope = MainScope()
 
@@ -60,9 +74,13 @@ class RecallApplication : Application(), Configuration.Provider {
             contentObserver
         )
 
-        // Schedule background OCR processing
+        // Schedule periodic background OCR processing
         scheduleBackgroundOcrProcessing()
-        
+
+        // On every cold launch, scan for screenshots taken while the app was dead,
+        // then run OCR on anything newly discovered or still pending.
+        scheduleLaunchTimeScan()
+
         Log.i(TAG, "RecallApplication initialized successfully")
     }
 
@@ -104,34 +122,62 @@ class RecallApplication : Application(), Configuration.Provider {
     private fun scheduleBackgroundOcrProcessing() {
         val workManager = WorkManager.getInstance(this)
 
+        // Read user-saved interval (blocks briefly — acceptable in Application.onCreate)
+        val savedInterval = runBlocking {
+            userPreferences.indexingIntervalFlow.first()
+        }
+        Log.i(TAG, "Scheduling background OCR: interval=${savedInterval.displayName}")
+
         val ocrWorkRequest = PeriodicWorkRequestBuilder<BackgroundOcrWorker>(
-            repeatInterval = 6,
-            repeatIntervalTimeUnit = TimeUnit.HOURS
+            repeatInterval = savedInterval.minutes,
+            repeatIntervalTimeUnit = savedInterval.timeUnit
         )
             .setConstraints(
                 androidx.work.Constraints.Builder()
-                    .setRequiresBatteryNotLow(true) // Don't run if battery is low
-                    .setRequiresCharging(false) // Can run on battery
+                    .setRequiresBatteryNotLow(!com.recall.app.BuildConfig.DEBUG) // Skip in debug
+                    .setRequiresCharging(false)
                     .build()
             )
             .addTag("background_ocr")
+            .addTag(INDEXING_TAG)
             .build()
 
+        // KEEP — preserves the existing schedule so cold launches don't reset the timer.
+        // UPDATE is used only in SettingsViewModel.setIndexingInterval where the interval changed.
         workManager.enqueueUniquePeriodicWork(
             "background_ocr_work",
             ExistingPeriodicWorkPolicy.KEEP,
             ocrWorkRequest
         )
+    }
 
-        // Also enqueue an initial one-time work to process any pending screenshots
-        val initialWorkRequest = androidx.work.OneTimeWorkRequestBuilder<BackgroundOcrWorker>()
+    /**
+     * Enqueues a [ScanExistingWorker] → [BackgroundOcrWorker] chain on every cold launch.
+     *
+     * This catches screenshots taken while the app process was dead — events that
+     * [ScreenshotContentObserver] cannot observe. The scan is idempotent: if no new files
+     * exist it exits immediately.
+     *
+     * [ExistingWorkPolicy.KEEP] ensures that if a launch-time chain is already running
+     * (e.g. user rapidly restarts the app) it is left undisturbed.
+     */
+    private fun scheduleLaunchTimeScan() {
+        val workManager = WorkManager.getInstance(this)
+
+        val scanRequest = OneTimeWorkRequestBuilder<ScanExistingWorker>()
+            .addTag("launch_scan")
+            .addTag(INDEXING_TAG)
+            .build()
+        val ocrRequest = OneTimeWorkRequestBuilder<BackgroundOcrWorker>()
             .addTag("background_ocr_initial")
+            .addTag(INDEXING_TAG)
             .build()
 
-        workManager.enqueueUniqueWork(
-            "background_ocr_initial_work",
-            androidx.work.ExistingWorkPolicy.KEEP,
-            initialWorkRequest
-        )
+        workManager
+            .beginUniqueWork("launch_scan_chain", ExistingWorkPolicy.KEEP, scanRequest)
+            .then(ocrRequest)
+            .enqueue()
+
+        Log.i(TAG, "Enqueued launch-time scan chain")
     }
 }

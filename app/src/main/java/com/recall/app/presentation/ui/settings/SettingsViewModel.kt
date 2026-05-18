@@ -4,6 +4,7 @@ import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.work.WorkInfo
+import com.recall.app.RecallApplication
 import com.recall.app.data.di.DeviceProfile
 import com.recall.app.data.di.DeviceProfiler
 import com.recall.app.data.local.ModelDownloadState
@@ -13,9 +14,16 @@ import com.recall.app.data.nlp.ModelSelector
 import com.recall.app.data.local.UserPreferences
 import com.recall.app.data.nlp.VectorIndexOptimized
 import com.recall.app.data.worker.ModelDownloadScheduler
+import android.content.Context
+import androidx.work.ExistingPeriodicWorkPolicy
+import androidx.work.PeriodicWorkRequestBuilder
+import androidx.work.WorkManager
+import com.recall.app.data.worker.BackgroundOcrWorker
 import com.recall.app.domain.model.CacheLimitOption
+import com.recall.app.domain.model.IndexingInterval
 import com.recall.app.domain.model.ThemeMode
 import dagger.hilt.android.lifecycle.HiltViewModel
+import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.firstOrNull
@@ -44,6 +52,7 @@ import javax.inject.Inject
  */
 @HiltViewModel
 class SettingsViewModel @Inject constructor(
+    @ApplicationContext private val context: Context,
     private val deviceProfiler: DeviceProfiler,
     private val modelSelector: ModelSelector,
     private val modelRepository: ModelRepository,
@@ -164,6 +173,45 @@ class SettingsViewModel @Inject constructor(
     /** Persists the user's chosen [ThemeMode] to DataStore. */
     fun setThemeMode(mode: ThemeMode) {
         viewModelScope.launch { userPreferences.setThemeMode(mode) }
+    }
+
+    // -----------------------------------------------------------------------
+    // Indexing interval — sourced from UserPreferences DataStore
+    // -----------------------------------------------------------------------
+
+    /** Current background indexing interval, persisted in DataStore. */
+    val indexingInterval: StateFlow<IndexingInterval> = userPreferences.indexingIntervalFlow
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5_000),
+            initialValue = IndexingInterval.DEFAULT
+        )
+
+    /**
+     * Persists the user's chosen [IndexingInterval] and re-schedules
+     * the WorkManager periodic worker so the new interval takes effect
+     * on the next period (WorkManager applies it via UPDATE policy).
+     */
+    fun setIndexingInterval(interval: IndexingInterval) {
+        viewModelScope.launch {
+            userPreferences.setIndexingInterval(interval)
+            // Re-schedule immediately so the new interval takes effect without app restart
+            runCatching {
+                val request = PeriodicWorkRequestBuilder<BackgroundOcrWorker>(
+                    repeatInterval = interval.minutes,
+                    repeatIntervalTimeUnit = interval.timeUnit
+                )
+                    .addTag("background_ocr")
+                    .addTag(RecallApplication.INDEXING_TAG)
+                    .build()
+                WorkManager.getInstance(context)
+                    .enqueueUniquePeriodicWork(
+                        "background_ocr_work",
+                        ExistingPeriodicWorkPolicy.UPDATE,
+                        request
+                    )
+            }
+        }
     }
 
     // -----------------------------------------------------------------------

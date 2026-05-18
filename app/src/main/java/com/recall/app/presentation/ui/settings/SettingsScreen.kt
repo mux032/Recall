@@ -39,6 +39,7 @@ fun SettingsScreen(
     val downloadProgress by viewModel.downloadProgress.collectAsState()
     val cacheLimitOption by viewModel.cacheLimitOption.collectAsState()
     val themeMode by viewModel.themeMode.collectAsState()
+    val indexingInterval by viewModel.indexingInterval.collectAsState()
 
     // Map DeviceProfile → SystemStatus for existing SystemStatusCards composable
     val systemStatus = remember(deviceProfile) {
@@ -110,6 +111,19 @@ fun SettingsScreen(
                     ThemeModeCard(
                         currentMode = themeMode,
                         onModeSelected = { viewModel.setThemeMode(it) }
+                    )
+                }
+            }
+
+            // ── Background Processing (indexing interval) ─────────────────────
+            item {
+                SettingsSection(
+                    title = "Background Processing",
+                    description = "How often the app scans for new screenshots to index"
+                ) {
+                    IndexingIntervalCard(
+                        currentInterval = indexingInterval,
+                        onIntervalSelected = { viewModel.setIndexingInterval(it) }
                     )
                 }
             }
@@ -194,6 +208,148 @@ private fun ThemeModeCard(
                     Text(
                         text = mode.displayName,
                         style = MaterialTheme.typography.labelMedium
+                    )
+                }
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun IndexingIntervalCard(
+    currentInterval: IndexingInterval,
+    onIntervalSelected: (IndexingInterval) -> Unit
+) {
+    var expanded by remember { mutableStateOf(false) }
+    val options = IndexingInterval.entries.toList()
+
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp),
+        color = MaterialTheme.colorScheme.surface
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Schedule,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(24.dp)
+                )
+                Column {
+                    Text(
+                        text = "Scan interval",
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    Text(
+                        text = "How often background indexing runs",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+
+            ExposedDropdownMenuBox(
+                expanded = expanded,
+                onExpandedChange = { expanded = !expanded }
+            ) {
+                OutlinedTextField(
+                    value = currentInterval.displayName,
+                    onValueChange = {},
+                    readOnly = true,
+                    trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .menuAnchor(),
+                    shape = RoundedCornerShape(12.dp),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = MaterialTheme.colorScheme.primary,
+                        unfocusedBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.5f)
+                    )
+                )
+                ExposedDropdownMenu(
+                    expanded = expanded,
+                    onDismissRequest = { expanded = false }
+                ) {
+                    options.forEach { interval ->
+                        DropdownMenuItem(
+                            text = {
+                                Row(
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Text(
+                                        text = interval.displayName,
+                                        fontWeight = if (interval == currentInterval)
+                                            FontWeight.Bold else FontWeight.Normal
+                                    )
+                                    if (interval.isHighBatteryImpact) {
+                                        Text(
+                                            text = "⚡ High",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = Color(0xFFF59E0B)
+                                        )
+                                    }
+                                }
+                            },
+                            onClick = {
+                                onIntervalSelected(interval)
+                                expanded = false
+                            }
+                        )
+                    }
+                }
+            }
+
+            // Warning — shown when interval is below 1 hour
+            if (currentInterval.isHighBatteryImpact) {
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.Top,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(Color(0xFFF59E0B).copy(alpha = 0.1f))
+                        .padding(10.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Warning,
+                        contentDescription = null,
+                        tint = Color(0xFFF59E0B),
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Text(
+                        text = "Frequent scanning increases battery usage. For most users, every hour or longer is recommended.",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = Color(0xFFF59E0B)
+                    )
+                }
+            } else {
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.Top
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Info,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(14.dp)
+                    )
+                    Text(
+                        text = "Takes effect on the next scheduled run.",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
             }
