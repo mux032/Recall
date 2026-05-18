@@ -108,6 +108,9 @@ fun HomeScreen(
     }
     val searchHistory by viewModel.searchHistory.collectAsState()
     val selectedFilter by viewModel.selectedFilter.collectAsState()
+    val indexingStats by viewModel.indexingStats.collectAsState()
+    val isBannerVisible by viewModel.isBannerVisible.collectAsState()
+    val isIndexingActive by viewModel.isIndexingActive.collectAsState()
     val isLoadingMore by viewModel.isLoadingMore.collectAsState()
     val allPagesLoaded by viewModel.allPagesLoaded.collectAsState()
     var searchQuery by remember { mutableStateOf(TextFieldValue("")) }
@@ -142,6 +145,14 @@ fun HomeScreen(
                     CuratorSmartFilters(
                         selectedFilter = selectedFilter,
                         onFilterSelected = { viewModel.setFilter(it) }
+                    )
+                    ProcessingStatusBanner(
+                        isVisible = isBannerVisible,
+                        stats = indexingStats,
+                        isIndexingActive = isIndexingActive,
+                        onDismiss = { viewModel.dismissBanner() },
+                        onTapBanner = onSettingsClick,
+                        onToggle = { viewModel.toggleIndexing() }
                     )
                 }
             },

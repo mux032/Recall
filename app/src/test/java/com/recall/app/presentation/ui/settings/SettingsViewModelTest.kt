@@ -10,7 +10,9 @@ import com.recall.app.data.nlp.ModelSelector
 import com.recall.app.data.local.UserPreferences
 import com.recall.app.data.nlp.VectorIndexOptimized
 import com.recall.app.data.worker.ModelDownloadScheduler
+import android.content.Context
 import com.recall.app.domain.model.CacheLimitOption
+import com.recall.app.domain.model.IndexingInterval
 import com.recall.app.domain.model.ThemeMode
 import com.recall.app.util.MemoryClass
 import kotlinx.coroutines.Dispatchers
@@ -50,6 +52,7 @@ import org.robolectric.annotation.Config
 @OptIn(ExperimentalCoroutinesApi::class)
 class SettingsViewModelTest {
 
+    private lateinit var mockContext: Context
     private lateinit var deviceProfiler: DeviceProfiler
     private lateinit var modelSelector: ModelSelector
     private lateinit var modelRepository: ModelRepository
@@ -87,8 +90,10 @@ class SettingsViewModelTest {
 
         // Default stubs
         whenever(deviceProfiler.getProfile()).thenReturn(testProfile)
+        mockContext = mock()
         whenever(userPreferences.vectorCacheLimitFlow).thenReturn(flowOf(CacheLimitOption.AUTO))
         whenever(userPreferences.themeModeFlow).thenReturn(flowOf(ThemeMode.SYSTEM))
+        whenever(userPreferences.indexingIntervalFlow).thenReturn(flowOf(IndexingInterval.DEFAULT))
         whenever(modelSelector.selectModel()).thenReturn(testModel)
         whenever(modelRepository.downloadState).thenReturn(flowOf(ModelDownloadState.NONE))
         whenever(modelRepository.downloadProgress).thenReturn(flowOf(0f))
@@ -396,7 +401,33 @@ class SettingsViewModelTest {
         verify(userPreferences).setThemeMode(ThemeMode.SYSTEM)
     }
 
+    // -----------------------------------------------------------------------
+    // Indexing interval tests
+    // -----------------------------------------------------------------------
+
+    @Test
+    fun `indexingInterval default value is DEFAULT`() {
+        val viewModel = buildViewModel()
+        assertEquals(IndexingInterval.DEFAULT, viewModel.indexingInterval.value)
+    }
+
+    @Test
+    fun `setIndexingInterval persists to UserPreferences`() = runTest {
+        val viewModel = buildViewModel()
+        viewModel.setIndexingInterval(IndexingInterval.EVERY_1_HOUR)
+        advanceUntilIdle()
+        verify(userPreferences).setIndexingInterval(IndexingInterval.EVERY_1_HOUR)
+    }
+
+    @Test
+    fun `setIndexingInterval does not crash when WorkManager unavailable`() = runTest {
+        val viewModel = buildViewModel()
+        viewModel.setIndexingInterval(IndexingInterval.EVERY_6_HOURS)
+        advanceUntilIdle() // must not throw
+    }
+
     private fun buildViewModel() = SettingsViewModel(
+        context = mockContext,
         deviceProfiler = deviceProfiler,
         modelSelector = modelSelector,
         modelRepository = modelRepository,
