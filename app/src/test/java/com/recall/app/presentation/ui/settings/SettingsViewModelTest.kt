@@ -11,6 +11,7 @@ import com.recall.app.data.local.UserPreferences
 import com.recall.app.data.nlp.VectorIndexOptimized
 import com.recall.app.data.worker.ModelDownloadScheduler
 import com.recall.app.domain.model.CacheLimitOption
+
 import com.recall.app.domain.model.ThemeMode
 import com.recall.app.util.MemoryClass
 import kotlinx.coroutines.Dispatchers
@@ -49,6 +50,7 @@ import org.robolectric.annotation.Config
 @Config(manifest = Config.NONE, sdk = [Build.VERSION_CODES.UPSIDE_DOWN_CAKE])
 @OptIn(ExperimentalCoroutinesApi::class)
 class SettingsViewModelTest {
+
 
     private lateinit var deviceProfiler: DeviceProfiler
     private lateinit var modelSelector: ModelSelector

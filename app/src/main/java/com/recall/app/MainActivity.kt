@@ -92,8 +92,12 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun startInitialDeepScan() {
-        val scanRequest = OneTimeWorkRequestBuilder<ScanExistingWorker>().build()
-        val ocrRequest = OneTimeWorkRequestBuilder<com.recall.app.data.worker.BackgroundOcrWorker>().build()
+        val scanRequest = OneTimeWorkRequestBuilder<ScanExistingWorker>()
+            .addTag(RecallApplication.INDEXING_TAG)
+            .build()
+        val ocrRequest = OneTimeWorkRequestBuilder<com.recall.app.data.worker.BackgroundOcrWorker>()
+            .addTag(RecallApplication.INDEXING_TAG)
+            .build()
 
         // Use beginUniqueWork so duplicate calls (permission grant + LaunchedEffect re-trigger)
         // never spawn more than one scan→OCR chain at a time. KEEP means if a chain is already

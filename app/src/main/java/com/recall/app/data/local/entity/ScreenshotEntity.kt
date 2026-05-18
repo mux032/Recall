@@ -44,7 +44,14 @@ data class ScreenshotEntity(
     val isUserEdited: Boolean = false,
     val userEditedAt: Long? = null,
     val ocrRetryCount: Int = 0,
-    /** Package name of the app that created this screenshot (e.g. "com.whatsapp"). Populated from
+    /**
+     * Number of times embedding generation has been retried for this screenshot.
+     * Tracked separately from [ocrRetryCount] so that transient embedding failures
+     * (model not yet loaded, OOM, etc.) do not burn through the OCR retry budget
+     * and permanently orphan rows that already have valid OCR text.
+     */
+    val embeddingRetryCount: Int = 0,
+    /** Package name of the app that created this screenshot (e.g. \"com.whatsapp\"). Populated from
      *  MediaStore.Images.Media.OWNER_PACKAGE_NAME on API 29+; empty string on older devices. */
     val appName: String = ""
 )

@@ -5,6 +5,7 @@ import android.util.Log
 import androidx.hilt.work.HiltWorker
 import androidx.work.CoroutineWorker
 import androidx.work.WorkerParameters
+import com.recall.app.RecallApplication
 import com.recall.app.data.local.dao.ScreenshotDao
 import com.recall.app.data.local.entity.ScreenshotEntity
 import com.recall.app.domain.model.ProcessingState
@@ -16,7 +17,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
 
 /**
@@ -42,74 +42,120 @@ class BackgroundOcrWorker @AssistedInject constructor(
         try {
             Log.d(TAG, "Starting background OCR processing...")
 
-            // Get screenshots without OCR text, ordered by newest first
-            // Filter out screenshots that have exceeded max retry count
-            val allScreenshots = screenshotDao.getAllScreenshots()
-                .first() // Get first emission from Flow
-                .filter { screenshot -> 
-                    screenshot.ocrText.isNullOrBlank() && 
-                    screenshot.ocrRetryCount < MAX_OCR_RETRIES
-                }
-                .sortedByDescending { screenshot -> screenshot.dateCreated } // Newest first
+            var totalProcessed = 0
+            var totalSuccess  = 0
+            var totalErrors   = 0
 
-            if (allScreenshots.isEmpty()) {
-                Log.i(TAG, "No screenshots need OCR processing")
-                return@withContext Result.success()
-            }
+            // ── Pass 1: OCR-pending rows ─────────────────────────────────────
+            // Fetches only rows where ocrText IS NULL — filtering done in SQL,
+            // so we never load the entire table into memory.
+            val ocrPending = screenshotDao.getOcrPendingScreenshots(
+                limit      = MAX_SCREENSHOTS_PER_RUN,
+                maxRetries = MAX_OCR_RETRIES
+            )
 
-            Log.i(TAG, "Found ${allScreenshots.size} screenshots needing OCR processing")
+            if (ocrPending.isNotEmpty()) {
+                Log.i(TAG, "Pass 1: ${ocrPending.size} screenshots need OCR")
 
-            var processedCount = 0
-            var successCount = 0
-            var errorCount = 0
-
-            // Process in batches to avoid overwhelming the device
-            val batches = allScreenshots.chunked(BATCH_SIZE)
-
-            for ((batchIndex, batch) in batches.withIndex()) {
-                if (isStopped()) {
-                    Log.w(TAG, "Worker stopped before batch ${batchIndex + 1}, processed $processedCount screenshots")
-                    return@withContext Result.retry()
-                }
-
-                Log.d(TAG, "Processing batch ${batchIndex + 1}/${batches.size} (${batch.size} screenshots)")
-
-                // ── Phase 1: Parallel OCR ────────────────────────────────────
-                // ML Kit TextRecognizer is thread-safe — fire all OCR tasks concurrently.
-                // Each coroutine returns a pair of (screenshot, extractedText?) so phase 2
-                // can work sequentially on the results without re-querying the DB.
-                val ocrResults = coroutineScope {
-                    batch.map { screenshot ->
-                        async(Dispatchers.IO) {
-                            runOcrForScreenshot(screenshot)
-                        }
-                    }.awaitAll()
-                }
-
-                // ── Phase 2: Sequential embedding + DB save ──────────────────
-                // ONNX inference is CPU-bound; running M embeddings in parallel risks
-                // thermal throttling. Sequential is safe and still fast (~5–20 ms each).
-                for (result in ocrResults) {
-                    val (screenshot, extractedText) = result
-                    try {
-                        finalizeScreenshot(screenshot, extractedText)
-                        successCount++
-                        Log.d(TAG, "✓ Processed: ${screenshot.fileName}")
-                    } catch (e: Exception) {
-                        errorCount++
-                        Log.e(TAG, "✗ Failed to finalize: ${screenshot.fileName}", e)
+                val batches = ocrPending.chunked(BATCH_SIZE)
+                for ((batchIndex, batch) in batches.withIndex()) {
+                    if (isStopped()) {
+                        Log.w(TAG, "Worker stopped during Pass 1 batch ${batchIndex + 1}")
+                        return@withContext Result.retry()
                     }
-                    processedCount++
-                }
+                    Log.d(TAG, "Pass 1 batch ${batchIndex + 1}/${batches.size} (${batch.size} items)")
 
-                // Thermal cool-down between batches
-                if (batchIndex < batches.size - 1) {
-                    kotlinx.coroutines.delay(INTER_BATCH_DELAY_MS)
+                    // Parallel OCR — ML Kit TextRecognizer is thread-safe
+                    val ocrResults = coroutineScope {
+                        batch.map { screenshot ->
+                            async(Dispatchers.IO) { runOcrForScreenshot(screenshot) }
+                        }.awaitAll()
+                    }
+
+                    // Sequential embedding + DB save
+                    for ((screenshot, extractedText) in ocrResults) {
+                        try {
+                            finalizeScreenshot(screenshot, extractedText)
+                            totalSuccess++
+                            Log.d(TAG, "✓ OCR+embed: ${screenshot.fileName}")
+                        } catch (e: Exception) {
+                            totalErrors++
+                            Log.e(TAG, "✗ Finalize failed: ${screenshot.fileName}", e)
+                        }
+                        totalProcessed++
+                    }
+
+                    if (batchIndex < batches.size - 1) {
+                        kotlinx.coroutines.delay(INTER_BATCH_DELAY_MS)
+                    }
+                }
+            } else {
+                Log.i(TAG, "Pass 1: no screenshots need OCR")
+            }
+
+            // ── Pass 2: Embedding-pending rows ───────────────────────────────
+            // Rows where OCR succeeded but embeddingGenerator.generate() returned null
+            // (model not loaded, OOM, etc.). Re-attempt embedding only — no re-OCR.
+            val remainingSlots = MAX_SCREENSHOTS_PER_RUN - ocrPending.size
+            if (remainingSlots > 0) {
+                val embeddingPending = screenshotDao.getEmbeddingPendingScreenshots(
+                    limit              = remainingSlots,
+                    maxEmbeddingRetries = MAX_EMBEDDING_RETRIES
+                )
+
+                if (embeddingPending.isNotEmpty()) {
+                    Log.i(TAG, "Pass 2: ${embeddingPending.size} screenshots need embedding only")
+
+                    for (screenshot in embeddingPending) {
+                        if (isStopped()) {
+                            Log.w(TAG, "Worker stopped during Pass 2")
+                            return@withContext Result.retry()
+                        }
+                        try {
+                            retryEmbedding(screenshot)
+                            totalSuccess++
+                            Log.d(TAG, "✓ Embed-only: ${screenshot.fileName}")
+                        } catch (e: Exception) {
+                            totalErrors++
+                            Log.e(TAG, "✗ Embed-only failed: ${screenshot.fileName}", e)
+                        }
+                        totalProcessed++
+                    }
+                } else {
+                    Log.i(TAG, "Pass 2: no screenshots need embedding")
                 }
             }
 
-            Log.i(TAG, "=== Background OCR Complete ===")
-            Log.i(TAG, "Processed: $processedCount, Success: $successCount, Errors: $errorCount")
+            if (totalProcessed == 0) {
+                Log.i(TAG, "No screenshots need OCR processing")
+            } else {
+                Log.i(TAG, "=== Batch complete: $totalProcessed processed ($totalSuccess ok, $totalErrors errors) ===")
+
+                // Self-chain: if there are still pending items after this batch, immediately
+                // re-enqueue so processing continues without waiting for the next periodic run.
+                // KEEP policy means a duplicate is silently dropped if one is already queued.
+                // Pause still works: cancelAllWorkByTag(INDEXING_TAG) cancels both the running
+                // instance and any queued successor in one call.
+                val moreOcrPending = screenshotDao.getOcrPendingScreenshots(
+                    limit      = 1,
+                    maxRetries = MAX_OCR_RETRIES
+                ).isNotEmpty()
+                val moreEmbeddingPending = screenshotDao.getEmbeddingPendingScreenshots(
+                    limit               = 1,
+                    maxEmbeddingRetries = MAX_EMBEDDING_RETRIES
+                ).isNotEmpty()
+
+                if (moreOcrPending || moreEmbeddingPending) {
+                    Log.i(TAG, "More items pending — re-enqueueing next batch")
+                    val next = androidx.work.OneTimeWorkRequestBuilder<BackgroundOcrWorker>()
+                        .addTag(RecallApplication.INDEXING_TAG)
+                        .build()
+                    androidx.work.WorkManager.getInstance(appContext)
+                        .enqueueUniqueWork(SELF_CHAIN_WORK_NAME, androidx.work.ExistingWorkPolicy.KEEP, next)
+                } else {
+                    Log.i(TAG, "All screenshots indexed — indexing complete")
+                }
+            }
 
             Result.success()
 
@@ -164,15 +210,17 @@ class BackgroundOcrWorker @AssistedInject constructor(
     }
 
     /**
-     * Phase 2 — Embedding generation + DB save (called sequentially after parallel OCR).
+     * Pass 1 finalization — Embedding generation + DB save (called sequentially after parallel OCR).
      *
      * Takes the [extractedText] from [runOcrForScreenshot] and:
      * 1. Generates an ONNX embedding vector
-     * 2. Persists OCR text + embedding + [ProcessingState.Done] to the DB
-     * 3. Rebuilds the FTS index entry for this screenshot
+     * 2. If embedding succeeds → saves ocrText + embedding + [ProcessingState.Done]
+     * 3. If embedding returns null (model not loaded, OOM, etc.) → saves ocrText only,
+     *    leaves [ProcessingState.Pending] so the row appears in [getEmbeddingPendingScreenshots]
+     *    and is picked up by Pass 2 on the next worker run.
      *
-     * If [extractedText] is null the screenshot was already handled (retry count incremented)
-     * in Phase 1 — this function is a no-op in that case.
+     * If [extractedText] is null, Phase 1 already handled the failure (retry count incremented)
+     * — this function is a no-op in that case.
      */
     private suspend fun finalizeScreenshot(screenshot: ScreenshotEntity, extractedText: String?) {
         if (extractedText.isNullOrBlank()) return  // Phase 1 already handled failure
@@ -180,20 +228,66 @@ class BackgroundOcrWorker @AssistedInject constructor(
         try {
             val embedding = embeddingGenerator.generate(extractedText)
 
-            val updatedScreenshot = screenshot.copy(
-                ocrText = extractedText,
-                embeddingByteArray = embedding?.let { floatToByteArray(it) },
-                processingState = ProcessingState.Done,
-                ocrRetryCount = 0
-            )
-
-            screenshotDao.update(updatedScreenshot)
-            screenshotDao.rebuildFtsIndex()
-
-            Log.i(TAG, "Saved OCR + embedding for: ${screenshot.fileName}")
+            if (embedding != null) {
+                // Full success — OCR text + embedding ready → mark Done
+                screenshotDao.update(screenshot.copy(
+                    ocrText = extractedText,
+                    embeddingByteArray = floatToByteArray(embedding),
+                    processingState = ProcessingState.Done,
+                    ocrRetryCount = 0
+                ))
+                screenshotDao.rebuildFtsIndex()
+                Log.i(TAG, "Saved OCR + embedding for: ${screenshot.fileName}")
+            } else {
+                // Embedding failed (model unavailable / OOM) — save OCR text but stay Pending
+                // so Pass 2 can retry the embedding on the next worker run.
+                Log.w(TAG, "Embedding returned null for ${screenshot.fileName} — saving OCR only, will retry embedding")
+                screenshotDao.update(screenshot.copy(
+                    ocrText = extractedText,
+                    embeddingByteArray = null,
+                    processingState = ProcessingState.Pending,
+                    ocrRetryCount = 0
+                ))
+                screenshotDao.rebuildFtsIndex()
+            }
         } catch (e: Exception) {
             Log.e(TAG, "Failed to finalize ${screenshot.fileName}", e)
             screenshotDao.incrementOcrRetryCount(screenshot.id)
+            throw e
+        }
+    }
+
+    /**
+     * Pass 2 — Retry embedding for a row that already has [ScreenshotEntity.ocrText]
+     * but is missing [ScreenshotEntity.embeddingByteArray].
+     *
+     * Does not re-run OCR. On success saves embedding + [ProcessingState.Done] and
+     * resets [ScreenshotEntity.embeddingRetryCount] to 0.
+     * On failure increments [ScreenshotEntity.embeddingRetryCount] — intentionally
+     * separate from [ScreenshotEntity.ocrRetryCount] so that transient embedding errors
+     * (model not loaded, OOM) never permanently orphan rows with valid OCR text.
+     */
+    private suspend fun retryEmbedding(screenshot: ScreenshotEntity) {
+        val ocrText = screenshot.ocrText
+        if (ocrText.isNullOrBlank()) return  // Shouldn't happen given the SQL filter, but be safe
+
+        try {
+            val embedding = embeddingGenerator.generate(ocrText)
+            if (embedding != null) {
+                screenshotDao.update(screenshot.copy(
+                    embeddingByteArray = floatToByteArray(embedding),
+                    processingState = ProcessingState.Done,
+                    embeddingRetryCount = 0
+                ))
+                screenshotDao.rebuildFtsIndex()
+                Log.i(TAG, "Embedding retry succeeded for: ${screenshot.fileName}")
+            } else {
+                Log.w(TAG, "Embedding retry returned null for: ${screenshot.fileName}")
+                screenshotDao.incrementEmbeddingRetryCount(screenshot.id)
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Embedding retry failed for ${screenshot.fileName}", e)
+            screenshotDao.incrementEmbeddingRetryCount(screenshot.id)
             throw e
         }
     }
@@ -219,11 +313,28 @@ class BackgroundOcrWorker @AssistedInject constructor(
         const val MAX_OCR_RETRIES = 3
 
         /**
+         * Maximum number of embedding-only retry attempts per screenshot.
+         *
+         * Higher than [MAX_OCR_RETRIES] because embedding failures are almost always
+         * transient (model not yet downloaded, low RAM, cold start) rather than structural
+         * (corrupt file, ML Kit bug). A row with valid OCR text should never be permanently
+         * orphaned due to a temporary embedding failure.
+         */
+        const val MAX_EMBEDDING_RETRIES = 10
+
+        /**
          * Maximum number of screenshots to process in one worker run.
          * Caps total run time to prevent the OS from killing a long-running worker
          * and to avoid draining battery on large backlogs.
          */
         const val MAX_SCREENSHOTS_PER_RUN = 20
+
+        /**
+         * Unique work name used when the worker re-enqueues itself after completing a
+         * full batch while more items remain. [ExistingWorkPolicy.KEEP] prevents the
+         * periodic scheduler from spawning a second instance while one is already queued.
+         */
+        const val SELF_CHAIN_WORK_NAME = "background_ocr_self_chain"
 
         /**
          * Number of screenshots processed per batch.
