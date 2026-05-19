@@ -6,11 +6,14 @@ import android.util.Log
 import androidx.hilt.work.HiltWorkerFactory
 import androidx.work.Configuration
 import androidx.work.ExistingPeriodicWorkPolicy
+import androidx.work.ExistingWorkPolicy
+import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import com.recall.app.data.nlp.VectorIndexBootstrapper
 import com.recall.app.data.service.ScreenshotContentObserver
 import com.recall.app.data.worker.BackgroundOcrWorker
+import com.recall.app.data.worker.ScanExistingWorker
 import com.recall.app.domain.usecase.EmbeddingGenerator
 import dagger.hilt.android.HiltAndroidApp
 import javax.inject.Inject
@@ -24,6 +27,10 @@ class RecallApplication : Application(), Configuration.Provider {
 
     companion object {
         private const val TAG = "RecallApplication"
+
+        /** Shared WorkManager tag applied to every indexing worker.
+         *  Used by [HomeViewModel] to observe and cancel all active indexing in one call. */
+        const val INDEXING_TAG = "recall_indexing"
     }
 
     @Inject
@@ -60,9 +67,13 @@ class RecallApplication : Application(), Configuration.Provider {
             contentObserver
         )
 
-        // Schedule background OCR processing
+        // Schedule periodic background OCR processing
         scheduleBackgroundOcrProcessing()
-        
+
+        // On every cold launch, scan for screenshots taken while the app was dead,
+        // then run OCR on anything newly discovered or still pending.
+        scheduleLaunchTimeScan()
+
         Log.i(TAG, "RecallApplication initialized successfully")
     }
 
@@ -105,33 +116,54 @@ class RecallApplication : Application(), Configuration.Provider {
         val workManager = WorkManager.getInstance(this)
 
         val ocrWorkRequest = PeriodicWorkRequestBuilder<BackgroundOcrWorker>(
-            repeatInterval = 6,
+            repeatInterval = 6L,
             repeatIntervalTimeUnit = TimeUnit.HOURS
         )
             .setConstraints(
                 androidx.work.Constraints.Builder()
-                    .setRequiresBatteryNotLow(true) // Don't run if battery is low
-                    .setRequiresCharging(false) // Can run on battery
+                    .setRequiresBatteryNotLow(!BuildConfig.DEBUG) // Skip in debug
+                    .setRequiresCharging(false)
                     .build()
             )
             .addTag("background_ocr")
+            .addTag(INDEXING_TAG)
             .build()
 
+        // KEEP — preserves the existing schedule so cold launches don't reset the timer.
         workManager.enqueueUniquePeriodicWork(
             "background_ocr_work",
             ExistingPeriodicWorkPolicy.KEEP,
             ocrWorkRequest
         )
+    }
 
-        // Also enqueue an initial one-time work to process any pending screenshots
-        val initialWorkRequest = androidx.work.OneTimeWorkRequestBuilder<BackgroundOcrWorker>()
+    /**
+     * Enqueues a [ScanExistingWorker] → [BackgroundOcrWorker] chain on every cold launch.
+     *
+     * This catches screenshots taken while the app process was dead — events that
+     * [ScreenshotContentObserver] cannot observe. The scan is idempotent: if no new files
+     * exist it exits immediately.
+     *
+     * [ExistingWorkPolicy.KEEP] ensures that if a launch-time chain is already running
+     * (e.g. user rapidly restarts the app) it is left undisturbed.
+     */
+    private fun scheduleLaunchTimeScan() {
+        val workManager = WorkManager.getInstance(this)
+
+        val scanRequest = OneTimeWorkRequestBuilder<ScanExistingWorker>()
+            .addTag("launch_scan")
+            .addTag(INDEXING_TAG)
+            .build()
+        val ocrRequest = OneTimeWorkRequestBuilder<BackgroundOcrWorker>()
             .addTag("background_ocr_initial")
+            .addTag(INDEXING_TAG)
             .build()
 
-        workManager.enqueueUniqueWork(
-            "background_ocr_initial_work",
-            androidx.work.ExistingWorkPolicy.KEEP,
-            initialWorkRequest
-        )
+        workManager
+            .beginUniqueWork("launch_scan_chain", ExistingWorkPolicy.KEEP, scanRequest)
+            .then(ocrRequest)
+            .enqueue()
+
+        Log.i(TAG, "Enqueued launch-time scan chain")
     }
 }

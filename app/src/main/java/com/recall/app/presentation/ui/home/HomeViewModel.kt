@@ -5,10 +5,13 @@ import androidx.lifecycle.viewModelScope
 import com.recall.app.domain.model.Screenshot
 import com.recall.app.domain.model.ScreenshotFilter
 import com.recall.app.domain.model.SearchHistoryItem
+import android.content.Context
 import com.recall.app.data.local.ModelDownloadState
 import com.recall.app.data.local.ModelRepository
+import com.recall.app.data.local.dao.ScreenshotDao
 import com.recall.app.data.nlp.VectorIndexOptimized
 import com.recall.app.domain.repository.ScreenshotRepository
+import dagger.hilt.android.qualifiers.ApplicationContext
 import com.recall.app.domain.usecase.searchhistory.AddSearchHistoryUseCase
 import com.recall.app.domain.usecase.searchhistory.ClearSearchHistoryUseCase
 import com.recall.app.domain.usecase.searchhistory.DeleteSearchHistoryUseCase
@@ -28,20 +31,29 @@ import javax.inject.Inject
 
 @HiltViewModel
 class HomeViewModel @Inject constructor(
+    @ApplicationContext private val context: Context,
     private val screenshotRepository: ScreenshotRepository,
     private val getSearchHistoryUseCase: GetSearchHistoryUseCase,
     private val addSearchHistoryUseCase: AddSearchHistoryUseCase,
     private val deleteSearchHistoryUseCase: DeleteSearchHistoryUseCase,
     private val clearSearchHistoryUseCase: ClearSearchHistoryUseCase,
     private val vectorIndex: VectorIndexOptimized,
-    private val modelRepository: ModelRepository
+    private val modelRepository: ModelRepository,
+    private val screenshotDao: ScreenshotDao
 ) : ViewModel() {
 
     companion object {
         /** 7 days in milliseconds — the window for the RECENT filter. */
         private const val RECENT_WINDOW_MS = 7 * 24 * 60 * 60 * 1000L
 
-        /** Poll interval for vector index readiness check (mirrors SearchViewModel). */
+        /**
+         * Poll interval for [isVectorIndexReady].
+         *
+         * Polling is intentional here: [VectorIndexOptimized.isReady] is a plain in-memory
+         * boolean with no callback or Flow API — there is no reactive alternative.
+         * The check is fast (~microseconds) and stops automatically when the screen is
+         * not visible ([SharingStarted.WhileSubscribed]).
+         */
         private const val VECTOR_INDEX_POLL_INTERVAL_MS = 2_000L
 
         /**
@@ -161,6 +173,25 @@ class HomeViewModel @Inject constructor(
 
     init {
         loadNextPage()
+
+        // Observe DB row count reactively so that screenshots inserted by ScanExistingWorker
+        // (which runs *after* the first loadNextPage() snapshot) appear immediately in the grid.
+        // When the count grows beyond what we've already loaded, reset and reload from scratch.
+        viewModelScope.launch {
+            var previousCount = -1
+            screenshotDao.getScreenshotCountFlow().collect { dbCount ->
+                if (previousCount >= 0 && dbCount > previousCount) {
+                    // The DB gained new rows since the last emission (ScanExistingWorker
+                    // inserted screenshots while the paginated snapshot was stale) —
+                    // reload from the top so they appear immediately.
+                    // Note: comparing against previousCount, not _loadedScreenshots.value.size,
+                    // because the paginated window is always smaller than the total and would
+                    // trigger spurious reloads on every DB write (OCR updates, etc.).
+                    refresh()
+                }
+                previousCount = dbCount
+            }
+        }
     }
 
     // -----------------------------------------------------------------------
