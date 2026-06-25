@@ -5,8 +5,10 @@ import com.recall.app.domain.model.ScreenshotFilter
 import com.recall.app.domain.repository.ScreenshotRepository
 import java.time.LocalDate
 import java.time.ZoneId
+import android.content.Context
 import com.recall.app.data.local.ModelDownloadState
 import com.recall.app.data.local.ModelRepository
+import com.recall.app.data.local.dao.ScreenshotDao
 import com.recall.app.data.nlp.VectorIndexOptimized
 import com.recall.app.domain.usecase.searchhistory.AddSearchHistoryUseCase
 import com.recall.app.domain.usecase.searchhistory.ClearSearchHistoryUseCase
@@ -44,6 +46,8 @@ class HomeViewModelTest {
     private lateinit var clearSearchHistoryUseCase: ClearSearchHistoryUseCase
     private lateinit var vectorIndex: VectorIndexOptimized
     private lateinit var modelRepository: ModelRepository
+    private lateinit var screenshotDao: ScreenshotDao
+    private lateinit var mockContext: Context
     private lateinit var viewModel: HomeViewModel
 
     private val testDispatcher = StandardTestDispatcher()
@@ -58,10 +62,14 @@ class HomeViewModelTest {
         clearSearchHistoryUseCase = mock()
         vectorIndex = mock()
         modelRepository = mock()
+        screenshotDao = mock()
+        mockContext = mock()
 
         whenever(getSearchHistoryUseCase()).thenReturn(flowOf(emptyList()))
         whenever(vectorIndex.isReady()).thenReturn(false)
         whenever(modelRepository.downloadState).thenReturn(flowOf(ModelDownloadState.NONE))
+        // Default: DB count stays at 0 — no reactive refresh triggered in most tests
+        whenever(screenshotDao.getScreenshotCountFlow()).thenReturn(flowOf(0))
     }
 
     @After
@@ -469,14 +477,43 @@ class HomeViewModelTest {
         assertTrue("Expected isVectorIndexReady to emit true when model is READY", collected.contains(true))
     }
 
+    @Test
+    fun `screenshots appear when DB count grows after initial empty load`() = runTest {
+        // Simulate: first load finds 0 screenshots (DB empty when ScanExistingWorker hasn't run yet)
+        whenever(screenshotRepository.getScreenshotPage(any(), any()))
+            .thenReturn(emptyList())                        // first call (init)
+            .thenReturn(buildScreenshots(3))                // second call (after scan inserts)
+
+        // DB count flow: starts at 0, then jumps to 3 (ScanExistingWorker inserted rows)
+        val countFlow = kotlinx.coroutines.flow.MutableStateFlow(0)
+        whenever(screenshotDao.getScreenshotCountFlow()).thenReturn(countFlow)
+
+        val vm = buildViewModel()
+        // Actively collect screenshots so the WhileSubscribed StateFlow stays alive
+        val collected = mutableListOf<List<Screenshot>>()
+        val job = launch { vm.screenshots.collect { collected.add(it) } }
+
+        advanceUntilIdle()
+        assertEquals("should be empty before scan", emptyList<Screenshot>(), vm.screenshots.value)
+
+        // Simulate ScanExistingWorker inserting 3 screenshots into the DB
+        countFlow.value = 3
+        advanceUntilIdle()
+
+        assertEquals("should show 3 screenshots after scan", 3, vm.screenshots.value.size)
+        job.cancel()
+    }
+
     private fun buildViewModel() = HomeViewModel(
+        mockContext,
         screenshotRepository,
         getSearchHistoryUseCase,
         addSearchHistoryUseCase,
         deleteSearchHistoryUseCase,
         clearSearchHistoryUseCase,
         vectorIndex,
-        modelRepository
+        modelRepository,
+        screenshotDao
     )
 
     private fun buildScreenshots(count: Int, startId: Int = 0) = (0 until count).map {
