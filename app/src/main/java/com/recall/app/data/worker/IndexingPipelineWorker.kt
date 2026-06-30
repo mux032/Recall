@@ -31,6 +31,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.supervisorScope
 import java.nio.ByteBuffer
+import java.util.concurrent.atomic.AtomicInteger
 
 @HiltWorker
 class IndexingPipelineWorker @AssistedInject constructor(
@@ -71,7 +72,8 @@ class IndexingPipelineWorker @AssistedInject constructor(
         val ocrChannel = Channel<OcrResult>(capacity = OCR_CHANNEL_CAPACITY)
         val ocrWorkerCount = (Runtime.getRuntime().availableProcessors() / 2).coerceIn(2, MAX_OCR_WORKERS)
 
-        var completedCount = 0
+        // AtomicInteger ensures thread-safe increments across the two concurrent embedding coroutines
+        val completedCount = AtomicInteger(0)
 
         try {
             supervisorScope {
@@ -98,11 +100,11 @@ class IndexingPipelineWorker @AssistedInject constructor(
                 // Stage 3: Embedding pool — fan-out from ocrChannel
                 repeat(EMBEDDING_WORKER_COUNT) {
                     launch {
-                        runEmbeddingStage(ocrChannel) { count ->
-                            completedCount = count
-                            _indexingProgress.value = IndexingProgress(count, total)
+                        runEmbeddingStage(ocrChannel) {
+                            val done = completedCount.incrementAndGet()
+                            _indexingProgress.value = IndexingProgress(done, total)
                             if (total >= FOREGROUND_THRESHOLD) {
-                                try { setForeground(buildForegroundInfo(count, total)) } catch (_: Exception) {}
+                                try { setForeground(buildForegroundInfo(done, total)) } catch (_: Exception) {}
                             }
                         }
                     }
@@ -112,7 +114,8 @@ class IndexingPipelineWorker @AssistedInject constructor(
             Log.e(TAG, "Pipeline error: ${e.message}", e)
         }
 
-        _indexingProgress.value = IndexingProgress(completedCount, total)
+        val finalCount = completedCount.get()
+        _indexingProgress.value = IndexingProgress(finalCount, total)
 
         val remaining = screenshotDao.getPendingCount()
         if (remaining > 0 && !isStopped) {
@@ -124,7 +127,7 @@ class IndexingPipelineWorker @AssistedInject constructor(
                 .enqueueUniqueWork(PIPELINE_WORK_NAME, ExistingWorkPolicy.KEEP, next)
         }
 
-        Log.i(TAG, "IndexingPipelineWorker completed. Processed: $completedCount / $total")
+        Log.i(TAG, "IndexingPipelineWorker completed. Processed: $finalCount / $total")
         return Result.success()
     }
 
@@ -202,9 +205,8 @@ class IndexingPipelineWorker @AssistedInject constructor(
 
     private suspend fun runEmbeddingStage(
         ocrChannel: Channel<OcrResult>,
-        onProgress: suspend (Int) -> Unit
+        onProgress: suspend () -> Unit
     ) {
-        var localCompleted = 0
         var ftsRebuildCounter = 0
 
         for (result in ocrChannel) {
@@ -236,8 +238,7 @@ class IndexingPipelineWorker @AssistedInject constructor(
                         embeddingRetryCount = newCount
                     ))
                 }
-                localCompleted++
-                onProgress(localCompleted)
+                onProgress()
                 continue
             }
 
@@ -255,8 +256,7 @@ class IndexingPipelineWorker @AssistedInject constructor(
                 ftsRebuildCounter = 0
             }
 
-            localCompleted++
-            onProgress(localCompleted)
+            onProgress()
             Log.i(TAG, "Indexed: ${entity.fileName}")
         }
 
