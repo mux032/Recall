@@ -1,6 +1,7 @@
 package com.recall.app
 
 import android.os.Bundle
+import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.Box
@@ -16,7 +17,7 @@ import androidx.work.WorkManager
 import androidx.compose.foundation.isSystemInDarkTheme
 import com.recall.app.data.local.UserPreferences
 import com.recall.app.data.repository.PermissionRepository
-import com.recall.app.data.worker.ScanExistingWorker
+import com.recall.app.data.worker.IndexingPipelineWorker
 import com.recall.app.domain.model.ThemeMode
 import com.recall.app.presentation.ui.permissions.PermissionScreen
 import com.recall.app.presentation.ui.theme.RecallTheme
@@ -91,29 +92,23 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun startInitialDeepScan() {
-        val scanRequest = OneTimeWorkRequestBuilder<ScanExistingWorker>()
+    internal fun startInitialDeepScan() {
+        val request = OneTimeWorkRequestBuilder<IndexingPipelineWorker>()
             .addTag(RecallApplication.INDEXING_TAG)
             .build()
-        val ocrRequest = OneTimeWorkRequestBuilder<com.recall.app.data.worker.BackgroundOcrWorker>()
-            .addTag(RecallApplication.INDEXING_TAG)
-            .build()
-
-        // Use beginUniqueWork so duplicate calls (permission grant + LaunchedEffect re-trigger)
-        // never spawn more than one scan→OCR chain at a time. KEEP means if a chain is already
-        // running or enqueued, the new request is silently discarded.
-        WorkManager.getInstance(this)
-            .beginUniqueWork(
-                INITIAL_SCAN_WORK_NAME,
-                androidx.work.ExistingWorkPolicy.KEEP,
-                scanRequest
-            )
-            .then(ocrRequest)
-            .enqueue()
+        // Use the shared PIPELINE_WORK_NAME so this and RecallApplication.scheduleLaunchTimeScan()
+        // both resolve to the same unique work slot — KEEP prevents duplicate workers.
+        WorkManager.getInstance(this).enqueueUniqueWork(
+            IndexingPipelineWorker.PIPELINE_WORK_NAME,
+            androidx.work.ExistingWorkPolicy.KEEP,
+            request
+        )
+        Log.i(TAG, "Enqueued initial IndexingPipelineWorker")
     }
 
     companion object {
-        // Internal so tests can reference it as a regression guard
-        internal const val INITIAL_SCAN_WORK_NAME = "initial_scan_ocr_chain"
+        private const val TAG = "MainActivity"
+        // Kept for backwards compatibility with existing tests
+        internal const val INITIAL_SCAN_WORK_NAME = IndexingPipelineWorker.PIPELINE_WORK_NAME
     }
 }

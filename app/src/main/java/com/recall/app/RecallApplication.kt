@@ -1,6 +1,9 @@
 package com.recall.app
 
 import android.app.Application
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.os.Build
 import android.provider.MediaStore
 import android.util.Log
 import androidx.hilt.work.HiltWorkerFactory
@@ -13,6 +16,7 @@ import androidx.work.WorkManager
 import com.recall.app.data.nlp.VectorIndexBootstrapper
 import com.recall.app.data.service.ScreenshotContentObserver
 import com.recall.app.data.worker.BackgroundOcrWorker
+import com.recall.app.data.worker.IndexingPipelineWorker
 import com.recall.app.data.worker.ScanExistingWorker
 import com.recall.app.domain.usecase.EmbeddingGenerator
 import dagger.hilt.android.HiltAndroidApp
@@ -31,6 +35,9 @@ class RecallApplication : Application(), Configuration.Provider {
         /** Shared WorkManager tag applied to every indexing worker.
          *  Used by [HomeViewModel] to observe and cancel all active indexing in one call. */
         const val INDEXING_TAG = "recall_indexing"
+
+        /** Notification channel ID for foreground indexing service notifications. */
+        const val INDEXING_CHANNEL_ID = "indexing_channel"
     }
 
     @Inject
@@ -53,6 +60,8 @@ class RecallApplication : Application(), Configuration.Provider {
 
     override fun onCreate() {
         super.onCreate()
+
+        createIndexingNotificationChannel()
 
         Log.i(TAG, "RecallApplication starting...")
 
@@ -138,32 +147,43 @@ class RecallApplication : Application(), Configuration.Provider {
     }
 
     /**
-     * Enqueues a [ScanExistingWorker] → [BackgroundOcrWorker] chain on every cold launch.
+     * Creates the notification channel used by [IndexingPipelineWorker] for foreground
+     * service notifications. Safe to call on every launch — on API 26+ the system is
+     * idempotent for channels with the same ID.
+     */
+    private fun createIndexingNotificationChannel() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val channel = NotificationChannel(
+                INDEXING_CHANNEL_ID,
+                "Screenshot Indexing",
+                NotificationManager.IMPORTANCE_LOW
+            ).apply {
+                description = "Shows progress while indexing screenshots in the background"
+            }
+            val notificationManager = getSystemService(NotificationManager::class.java)
+            notificationManager?.createNotificationChannel(channel)
+        }
+    }
+
+    /**
+     * Enqueues an [IndexingPipelineWorker] on every cold launch.
      *
      * This catches screenshots taken while the app process was dead — events that
-     * [ScreenshotContentObserver] cannot observe. The scan is idempotent: if no new files
-     * exist it exits immediately.
+     * [ScreenshotContentObserver] cannot observe. The scan is idempotent: if no pending
+     * screenshots exist it exits immediately.
      *
-     * [ExistingWorkPolicy.KEEP] ensures that if a launch-time chain is already running
+     * [ExistingWorkPolicy.KEEP] ensures that if a launch-time worker is already running
      * (e.g. user rapidly restarts the app) it is left undisturbed.
      */
     private fun scheduleLaunchTimeScan() {
-        val workManager = WorkManager.getInstance(this)
-
-        val scanRequest = OneTimeWorkRequestBuilder<ScanExistingWorker>()
-            .addTag("launch_scan")
+        val pipelineRequest = OneTimeWorkRequestBuilder<IndexingPipelineWorker>()
             .addTag(INDEXING_TAG)
             .build()
-        val ocrRequest = OneTimeWorkRequestBuilder<BackgroundOcrWorker>()
-            .addTag("background_ocr_initial")
-            .addTag(INDEXING_TAG)
-            .build()
-
-        workManager
-            .beginUniqueWork("launch_scan_chain", ExistingWorkPolicy.KEEP, scanRequest)
-            .then(ocrRequest)
-            .enqueue()
-
-        Log.i(TAG, "Enqueued launch-time scan chain")
+        WorkManager.getInstance(this).enqueueUniqueWork(
+            IndexingPipelineWorker.PIPELINE_WORK_NAME,
+            ExistingWorkPolicy.KEEP,
+            pipelineRequest
+        )
+        Log.i(TAG, "Enqueued launch-time IndexingPipelineWorker")
     }
 }
