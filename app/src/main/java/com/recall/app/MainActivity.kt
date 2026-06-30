@@ -96,8 +96,10 @@ class MainActivity : ComponentActivity() {
         val request = OneTimeWorkRequestBuilder<IndexingPipelineWorker>()
             .addTag(RecallApplication.INDEXING_TAG)
             .build()
+        // Use the shared PIPELINE_WORK_NAME so this and RecallApplication.scheduleLaunchTimeScan()
+        // both resolve to the same unique work slot — KEEP prevents duplicate workers.
         WorkManager.getInstance(this).enqueueUniqueWork(
-            INITIAL_SCAN_WORK_NAME,
+            IndexingPipelineWorker.PIPELINE_WORK_NAME,
             androidx.work.ExistingWorkPolicy.KEEP,
             request
         )
@@ -106,7 +108,7 @@ class MainActivity : ComponentActivity() {
 
     companion object {
         private const val TAG = "MainActivity"
-        // Internal so tests can reference it as a regression guard
-        internal const val INITIAL_SCAN_WORK_NAME = "initial_scan_ocr_chain"
+        // Kept for backwards compatibility with existing tests
+        internal const val INITIAL_SCAN_WORK_NAME = IndexingPipelineWorker.PIPELINE_WORK_NAME
     }
 }

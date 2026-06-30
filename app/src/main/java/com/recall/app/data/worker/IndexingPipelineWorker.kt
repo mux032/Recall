@@ -50,7 +50,7 @@ class IndexingPipelineWorker @AssistedInject constructor(
     override suspend fun doWork(): Result {
         Log.i(TAG, "IndexingPipelineWorker started")
 
-        val total = screenshotDao.getPendingCount()
+        val total = screenshotDao.getPendingCount(MAX_OCR_RETRIES, MAX_EMBEDDING_RETRIES)
         if (total == 0) {
             Log.i(TAG, "No pending screenshots — exiting")
             return Result.success()
@@ -117,7 +117,7 @@ class IndexingPipelineWorker @AssistedInject constructor(
         val finalCount = completedCount.get()
         _indexingProgress.value = IndexingProgress(finalCount, total)
 
-        val remaining = screenshotDao.getPendingCount()
+        val remaining = screenshotDao.getPendingCount(MAX_OCR_RETRIES, MAX_EMBEDDING_RETRIES)
         if (remaining > 0 && !isStopped) {
             Log.i(TAG, "More items remain ($remaining) — self-chaining")
             val next = OneTimeWorkRequestBuilder<IndexingPipelineWorker>()

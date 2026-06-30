@@ -67,12 +67,20 @@ interface ScreenshotDao {
     suspend fun getEmbeddingPendingScreenshots(limit: Int, maxEmbeddingRetries: Int): List<ScreenshotEntity>
 
     /**
-     * Returns the total number of screenshots still awaiting indexing (PENDING or FAILED state).
-     * Used by [IndexingPipelineWorker] to determine whether there is work to do and to
-     * report progress.
+     * Returns the number of screenshots the pipeline will actually process on its next run:
+     * - PENDING state (not yet attempted), OR
+     * - FAILED with OCR retries remaining, OR
+     * - FAILED with embedding retries remaining (has ocrText but no embedding)
+     *
+     * Excludes permanently exhausted failures so the self-chain loop terminates correctly.
      */
-    @Query("SELECT COUNT(*) FROM screenshots WHERE processingState IN ('PENDING', 'FAILED')")
-    suspend fun getPendingCount(): Int
+    @Query("""
+        SELECT COUNT(*) FROM screenshots WHERE
+        processingState = 'PENDING'
+        OR (processingState = 'FAILED' AND ocrRetryCount < :maxOcrRetries)
+        OR (processingState = 'FAILED' AND ocrText IS NOT NULL AND embeddingRetryCount < :maxEmbeddingRetries)
+    """)
+    suspend fun getPendingCount(maxOcrRetries: Int, maxEmbeddingRetries: Int): Int
 
     /**
      * Returns a single page of screenshots ordered newest first.

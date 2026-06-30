@@ -180,7 +180,7 @@ class RecallApplication : Application(), Configuration.Provider {
             .addTag(INDEXING_TAG)
             .build()
         WorkManager.getInstance(this).enqueueUniqueWork(
-            "launch_scan_chain",
+            IndexingPipelineWorker.PIPELINE_WORK_NAME,
             ExistingWorkPolicy.KEEP,
             pipelineRequest
         )
