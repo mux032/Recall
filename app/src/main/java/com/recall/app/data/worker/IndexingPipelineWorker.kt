@@ -17,6 +17,7 @@ import androidx.work.WorkerParameters
 import com.recall.app.RecallApplication
 import com.recall.app.data.local.dao.ScreenshotDao
 import com.recall.app.data.local.entity.ScreenshotEntity
+import com.recall.app.data.repository.ScreenshotRepositoryImpl
 import com.recall.app.domain.model.ProcessingState
 import com.recall.app.domain.usecase.EmbeddingGenerator
 import com.recall.app.domain.usecase.OcrProcessor
@@ -38,6 +39,7 @@ class IndexingPipelineWorker @AssistedInject constructor(
     @Assisted private val appContext: Context,
     @Assisted workerParams: WorkerParameters,
     private val screenshotDao: ScreenshotDao,
+    private val screenshotRepository: ScreenshotRepositoryImpl,
     private val ocrProcessor: OcrProcessor,
     private val embeddingGenerator: EmbeddingGenerator
 ) : CoroutineWorker(appContext, workerParams) {
@@ -49,6 +51,17 @@ class IndexingPipelineWorker @AssistedInject constructor(
 
     override suspend fun doWork(): Result {
         Log.i(TAG, "IndexingPipelineWorker started")
+
+        // Stage 0: Scan MediaStore for new screenshots not yet in the DB.
+        // This replaces what ScanExistingWorker previously did before handing off to
+        // BackgroundOcrWorker. Without this, a fresh install finds 0 rows and exits.
+        val discovered = try {
+            screenshotRepository.scanExistingScreenshots()
+        } catch (e: Exception) {
+            Log.w(TAG, "MediaStore scan failed: ${e.message}")
+            0
+        }
+        Log.i(TAG, "MediaStore scan complete — discovered $discovered new screenshots")
 
         val total = screenshotDao.getPendingCount(MAX_OCR_RETRIES, MAX_EMBEDDING_RETRIES)
         if (total == 0) {

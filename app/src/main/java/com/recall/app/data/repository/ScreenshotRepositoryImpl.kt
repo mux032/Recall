@@ -224,14 +224,21 @@ class ScreenshotRepositoryImpl @Inject constructor(
         // Check permissions first
         val hasPermission = when {
             Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU -> {
+                // API 33+: READ_MEDIA_IMAGES
                 context.checkSelfPermission(android.Manifest.permission.READ_MEDIA_IMAGES) ==
                     android.content.pm.PackageManager.PERMISSION_GRANTED
             }
+            Build.VERSION.SDK_INT >= Build.VERSION_CODES.S -> {
+                // API 31-32 (Android 12, 12L): READ_EXTERNAL_STORAGE still required
+                context.checkSelfPermission(android.Manifest.permission.READ_EXTERNAL_STORAGE) ==
+                    android.content.pm.PackageManager.PERMISSION_GRANTED
+            }
             Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q -> {
-                // Android 10-12: No runtime permission needed for MediaStore
+                // API 29-30 (Android 10, 11): MediaStore access requires no runtime permission
                 true
             }
             else -> {
+                // API 26-28: READ_EXTERNAL_STORAGE required
                 context.checkSelfPermission(android.Manifest.permission.READ_EXTERNAL_STORAGE) ==
                     android.content.pm.PackageManager.PERMISSION_GRANTED
             }
@@ -307,12 +314,17 @@ class ScreenshotRepositoryImpl @Inject constructor(
             0
         }
 
-        // Common screenshot directories across Android devices
+        // Common screenshot directories across Android OEMs.
+        // Ordered by prevalence — most common first.
         val screenshotPatterns = listOf(
-            "Screenshots",
-            "Pictures/Screenshots",
-            "DCIM/Screenshots",
-            "screenshot"
+            "Screenshots",           // Stock Android, Pixel
+            "Pictures/Screenshots",  // Most OEMs
+            "DCIM/Screenshots",      // Some Samsung, LG
+            "Pictures/screenshot",   // Xiaomi/MIUI
+            "Screenshots/",          // OnePlus OxygenOS
+            "Pictures/ScreenShots",  // Huawei/Honor
+            "Screenrecorder",        // Catch screen recordings with text
+            "screenshot"             // Generic fallback (case-insensitive via LIKE)
         )
 
         val sortOrder = "${MediaStore.Images.Media.DATE_ADDED} DESC"
