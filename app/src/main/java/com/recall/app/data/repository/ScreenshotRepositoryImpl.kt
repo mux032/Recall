@@ -216,7 +216,7 @@ class ScreenshotRepositoryImpl @Inject constructor(
         )
     }
 
-    suspend fun scanExistingScreenshots(): Int {
+    override suspend fun scanExistingScreenshots(): Int {
         var addedCount = 0
         var skippedCount = 0
         var errorCount = 0
@@ -254,6 +254,11 @@ class ScreenshotRepositoryImpl @Inject constructor(
         // After: 1 DB query + 500 HashSet lookups (O(1) each)
         val existingPaths = screenshotDao.getAllScreenshotPaths().toSet()
         Log.d(TAG, "Loaded ${existingPaths.size} existing screenshot paths for comparison")
+
+        // Tracks paths inserted during this scan run to prevent duplicate inserts
+        // when the same file matches multiple OEM path patterns
+        // (e.g. "Screenshots" AND "Pictures/Screenshots" both match Pictures/Screenshots/).
+        val insertedThisRun = mutableSetOf<String>()
 
         val contentResolver: ContentResolver = context.contentResolver
         val uri = MediaStore.Images.Media.EXTERNAL_CONTENT_URI
@@ -381,10 +386,10 @@ class ScreenshotRepositoryImpl @Inject constructor(
                                 continue
                             }
 
-                            // CRITICAL FIX: O(1) HashSet lookup instead of DB query
-                            // Before: val existing = screenshotDao.getScreenshotByPath(filePath) // DB query
-                            // After: existingPaths.contains(filePath) // O(1) HashSet lookup
-                            if (existingPaths.contains(filePath)) {
+                            // Skip if already in DB or already inserted by an earlier pattern
+                            // in this run (prevents cross-pattern duplicates, e.g. a file in
+                            // Pictures/Screenshots/ matching both "Screenshots" and "Pictures/Screenshots").
+                            if (existingPaths.contains(filePath) || insertedThisRun.contains(filePath)) {
                                 Log.d(TAG, "Skipping duplicate: $filePath")
                                 skippedCount++
                                 continue
@@ -423,6 +428,7 @@ class ScreenshotRepositoryImpl @Inject constructor(
                             )
 
                             screenshotDao.insert(entity)
+                            insertedThisRun.add(filePath)
                             addedCount++
                             Log.i(TAG, "✓ Added screenshot: $fileName ($relativePath)")
                         } catch (e: Exception) {

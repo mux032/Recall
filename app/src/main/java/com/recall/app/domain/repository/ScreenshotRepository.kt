@@ -44,4 +44,12 @@ interface ScreenshotRepository {
      * Sets isUserEdited flag to prevent automatic OCR from overriding.
      */
     suspend fun saveUserEditedOcrText(id: String, editedText: String)
+
+    /**
+     * Scans MediaStore for images in screenshot directories and inserts any
+     * newly discovered files into the database as [ProcessingState.Pending] rows.
+     *
+     * @return the number of new screenshots added to the database.
+     */
+    suspend fun scanExistingScreenshots(): Int
 }

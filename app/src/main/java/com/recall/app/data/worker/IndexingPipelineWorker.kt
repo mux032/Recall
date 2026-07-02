@@ -17,8 +17,8 @@ import androidx.work.WorkerParameters
 import com.recall.app.RecallApplication
 import com.recall.app.data.local.dao.ScreenshotDao
 import com.recall.app.data.local.entity.ScreenshotEntity
-import com.recall.app.data.repository.ScreenshotRepositoryImpl
 import com.recall.app.domain.model.ProcessingState
+import com.recall.app.domain.repository.ScreenshotRepository
 import com.recall.app.domain.usecase.EmbeddingGenerator
 import com.recall.app.domain.usecase.OcrProcessor
 import dagger.assisted.Assisted
@@ -39,7 +39,7 @@ class IndexingPipelineWorker @AssistedInject constructor(
     @Assisted private val appContext: Context,
     @Assisted workerParams: WorkerParameters,
     private val screenshotDao: ScreenshotDao,
-    private val screenshotRepository: ScreenshotRepositoryImpl,
+    private val screenshotRepository: ScreenshotRepository,
     private val ocrProcessor: OcrProcessor,
     private val embeddingGenerator: EmbeddingGenerator
 ) : CoroutineWorker(appContext, workerParams) {

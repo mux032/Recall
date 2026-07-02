@@ -55,7 +55,7 @@ class MainActivity : ComponentActivity() {
                     // Always check the actual runtime permission — not just the DataStore flag.
                     // This correctly handles: permission revoked from Settings, fresh installs,
                     // and upgrades from older app versions that stored a stale granted flag.
-                    val permissionsGranted by remember {
+                    var permissionsGranted by remember {
                         mutableStateOf(permissionRepository.hasActualPermission())
                     }
 
@@ -64,6 +64,7 @@ class MainActivity : ComponentActivity() {
                             onPermissionsGranted = {
                                 scope.launch {
                                     permissionRepository.setPermissionGranted(true)
+                                    permissionsGranted = true  // triggers recomposition → RecallNavGraph
                                     // Use REPLACE so this always runs after an explicit grant,
                                     // even if a stale KEEP worker is still in PENDING/RUNNING state.
                                     startInitialDeepScan(forceReplace = true)
