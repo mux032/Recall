@@ -176,6 +176,22 @@ class RecallApplication : Application(), Configuration.Provider {
      * (e.g. user rapidly restarts the app) it is left undisturbed.
      */
     private fun scheduleLaunchTimeScan() {
+        // Only enqueue if the app already has the storage permission.
+        // On first launch the user hasn't seen the permission screen yet — skip here;
+        // MainActivity.startInitialDeepScan() will enqueue after the grant callback.
+        val hasPermission = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+            checkSelfPermission(android.Manifest.permission.READ_MEDIA_IMAGES) ==
+                android.content.pm.PackageManager.PERMISSION_GRANTED
+        } else {
+            checkSelfPermission(android.Manifest.permission.READ_EXTERNAL_STORAGE) ==
+                android.content.pm.PackageManager.PERMISSION_GRANTED
+        }
+
+        if (!hasPermission) {
+            Log.i(TAG, "Skipping launch-time scan — storage permission not yet granted")
+            return
+        }
+
         val pipelineRequest = OneTimeWorkRequestBuilder<IndexingPipelineWorker>()
             .addTag(INDEXING_TAG)
             .build()

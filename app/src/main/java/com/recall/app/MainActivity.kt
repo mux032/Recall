@@ -4,13 +4,10 @@ import android.os.Bundle
 import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
-import androidx.compose.material3.Text
 import androidx.compose.runtime.*
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkManager
@@ -55,35 +52,30 @@ class MainActivity : ComponentActivity() {
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background
                 ) {
-                    var permissionsGranted by remember { mutableStateOf(false) }
-                    var isCheckingPermission by remember { mutableStateOf(true) }
-
-                    // Check persisted permission state on app launch
-                    LaunchedEffect(Unit) {
-                        val granted = permissionRepository.isPermissionGranted.first()
-                        permissionsGranted = granted
-                        isCheckingPermission = false
+                    // Always check the actual runtime permission — not just the DataStore flag.
+                    // This correctly handles: permission revoked from Settings, fresh installs,
+                    // and upgrades from older app versions that stored a stale granted flag.
+                    val permissionsGranted by remember {
+                        mutableStateOf(permissionRepository.hasActualPermission())
                     }
 
-                    if (isCheckingPermission) {
-                        // Show loading while checking permission state
-                        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                            Text("Loading...")
-                        }
-                    } else if (!permissionsGranted) {
+                    if (!permissionsGranted) {
                         PermissionScreen(
                             onPermissionsGranted = {
                                 scope.launch {
                                     permissionRepository.setPermissionGranted(true)
-                                    permissionsGranted = true
-                                    startInitialDeepScan()
+                                    // Use REPLACE so this always runs after an explicit grant,
+                                    // even if a stale KEEP worker is still in PENDING/RUNNING state.
+                                    startInitialDeepScan(forceReplace = true)
                                 }
                             }
                         )
                     } else {
-                        // Permission already granted - trigger scan if needed
+                        // Permission already granted on launch — trigger scan via KEEP
+                        // (RecallApplication already tried; this is a safety net for cases
+                        // where the Application-level scan was skipped or failed).
                         LaunchedEffect(Unit) {
-                            startInitialDeepScan()
+                            startInitialDeepScan(forceReplace = false)
                         }
                         RecallNavGraph()
                     }
@@ -92,18 +84,23 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    internal fun startInitialDeepScan() {
+    internal fun startInitialDeepScan(forceReplace: Boolean = false) {
         val request = OneTimeWorkRequestBuilder<IndexingPipelineWorker>()
             .addTag(RecallApplication.INDEXING_TAG)
             .build()
-        // Use the shared PIPELINE_WORK_NAME so this and RecallApplication.scheduleLaunchTimeScan()
-        // both resolve to the same unique work slot — KEEP prevents duplicate workers.
+        val policy = if (forceReplace) {
+            // After explicit permission grant: always run, even if a stale worker exists
+            androidx.work.ExistingWorkPolicy.REPLACE
+        } else {
+            // Normal re-launch: don't interrupt an already-running scan
+            androidx.work.ExistingWorkPolicy.KEEP
+        }
         WorkManager.getInstance(this).enqueueUniqueWork(
             IndexingPipelineWorker.PIPELINE_WORK_NAME,
-            androidx.work.ExistingWorkPolicy.KEEP,
+            policy,
             request
         )
-        Log.i(TAG, "Enqueued initial IndexingPipelineWorker")
+        Log.i(TAG, "Enqueued IndexingPipelineWorker (forceReplace=$forceReplace)")
     }
 
     companion object {
