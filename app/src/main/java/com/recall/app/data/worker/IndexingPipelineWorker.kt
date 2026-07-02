@@ -23,6 +23,7 @@ import com.recall.app.domain.usecase.EmbeddingGenerator
 import com.recall.app.domain.usecase.OcrProcessor
 import dagger.assisted.Assisted
 import dagger.assisted.AssistedInject
+import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
@@ -51,6 +52,7 @@ class IndexingPipelineWorker @AssistedInject constructor(
 
     override suspend fun doWork(): Result {
         Log.i(TAG, "IndexingPipelineWorker started")
+        resetProgress() // clear stale progress from any prior run
 
         // Stage 0: Scan MediaStore for new screenshots not yet in the DB.
         // This replaces what ScanExistingWorker previously did before handing off to
@@ -88,17 +90,24 @@ class IndexingPipelineWorker @AssistedInject constructor(
         // AtomicInteger ensures thread-safe increments across the two concurrent embedding coroutines
         val completedCount = AtomicInteger(0)
 
+        // Log any uncaught child exception by stage name instead of swallowing it silently.
+        // supervisorScope keeps siblings alive when one child fails — this handler makes
+        // failures visible in logcat so they can be debugged.
+        val stageErrorHandler = CoroutineExceptionHandler { _, throwable ->
+            Log.e(TAG, "Pipeline stage error: ${throwable.message}", throwable)
+        }
+
         try {
             supervisorScope {
                 // Stage 1: Scanner — produces into scanChannel
-                launch {
+                launch(stageErrorHandler) {
                     runScannerStage(scanChannel)
                 }
 
                 // Stage 2: OCR pool — fan-out from scanChannel, fan-in to ocrChannel.
                 // We wrap all OCR workers in an inner coroutineScope so we can close
                 // ocrChannel after ALL OCR workers finish, signalling Stage 3 to terminate.
-                launch {
+                launch(stageErrorHandler) {
                     coroutineScope {
                         repeat(ocrWorkerCount) {
                             launch {
@@ -112,7 +121,7 @@ class IndexingPipelineWorker @AssistedInject constructor(
 
                 // Stage 3: Embedding pool — fan-out from ocrChannel
                 repeat(EMBEDDING_WORKER_COUNT) {
-                    launch {
+                    launch(stageErrorHandler) {
                         runEmbeddingStage(ocrChannel) {
                             val done = completedCount.incrementAndGet()
                             _indexingProgress.value = IndexingProgress(done, total)
@@ -326,7 +335,14 @@ class IndexingPipelineWorker @AssistedInject constructor(
         const val MAX_OCR_RETRIES = BackgroundOcrWorker.MAX_OCR_RETRIES
         const val MAX_EMBEDDING_RETRIES = BackgroundOcrWorker.MAX_EMBEDDING_RETRIES
 
+        // Shared observable for UI components to observe overall indexing progress.
+        // Reset to (0, 0) at the start of every doWork() run to prevent stale values
+        // from a prior run appearing when a new run begins.
         private val _indexingProgress = MutableStateFlow(IndexingProgress(0, 0))
         val indexingProgress: StateFlow<IndexingProgress> = _indexingProgress.asStateFlow()
+
+        internal fun resetProgress() {
+            _indexingProgress.value = IndexingProgress(0, 0)
+        }
     }
 }

@@ -14,6 +14,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
+import org.mockito.kotlin.doReturn
 import org.mockito.kotlin.mock
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
@@ -25,16 +26,20 @@ class ScreenshotRepositoryImplTest {
     private lateinit var screenshotDao: ScreenshotDao
     private lateinit var ocrProcessor: OcrProcessor
     private lateinit var embeddingGenerator: EmbeddingGenerator
+    private lateinit var permissionRepository: PermissionRepository
     private lateinit var repository: ScreenshotRepositoryImpl
     private lateinit var context: Context
 
     @Before
     fun setup() {
         context = ApplicationProvider.getApplicationContext()
-        screenshotDao = mock()
         ocrProcessor = mock()
         embeddingGenerator = mock()
-        repository = ScreenshotRepositoryImpl(screenshotDao, ocrProcessor, embeddingGenerator, context)
+        permissionRepository = mock { on { hasActualPermission() } doReturn true }
+        screenshotDao = mock { onBlocking { getAllScreenshotPaths() } doReturn emptyList() }
+        repository = ScreenshotRepositoryImpl(
+            screenshotDao, ocrProcessor, embeddingGenerator, permissionRepository, context
+        )
     }
 
     @Test

@@ -31,22 +31,25 @@ class PermissionRepository @Inject constructor(
     }
 
     /**
-     * Check if permission is granted at runtime (actual Android permission state)
+     * Single authoritative runtime permission check covering all supported API levels:
+     * - API 33+ (Tiramisu): READ_MEDIA_IMAGES
+     * - API 31-32 (S, Sv2): READ_EXTERNAL_STORAGE (still required on Android 12/12L)
+     * - API 29-30 (Q, R): no runtime permission needed for MediaStore image access
+     * - API < 29: READ_EXTERNAL_STORAGE
+     *
+     * Use this instead of inline permission checks scattered across the codebase.
      */
     fun hasActualPermission(): Boolean {
-        val androidPermission = getAndroidPermission()
-        val checkResult = context.checkCallingOrSelfPermission(androidPermission)
-        return checkResult == android.content.pm.PackageManager.PERMISSION_GRANTED
-    }
-
-    /**
-     * Get the appropriate permission string based on Android version
-     */
-    private fun getAndroidPermission(): String {
-        return if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
-            android.Manifest.permission.READ_MEDIA_IMAGES
-        } else {
-            android.Manifest.permission.READ_EXTERNAL_STORAGE
+        val granted = android.content.pm.PackageManager.PERMISSION_GRANTED
+        return when {
+            android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU ->
+                context.checkSelfPermission(android.Manifest.permission.READ_MEDIA_IMAGES) == granted
+            android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S ->
+                context.checkSelfPermission(android.Manifest.permission.READ_EXTERNAL_STORAGE) == granted
+            android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q ->
+                true // API 29-30: MediaStore image access requires no runtime permission
+            else ->
+                context.checkSelfPermission(android.Manifest.permission.READ_EXTERNAL_STORAGE) == granted
         }
     }
 }

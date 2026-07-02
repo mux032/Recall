@@ -58,9 +58,12 @@ fun PermissionScreen(
     val photoPickerLauncher = rememberLauncherForActivityResult(
         contract = PickMultipleVisualMedia()
     ) { uris ->
-        // User has granted access to selected photos
-        // This triggers the scan which will now have access to at least some photos
-        onPermissionsGranted()
+        // Only proceed if the user actually selected at least one photo.
+        // An empty list means they dismissed the picker without granting any access —
+        // calling onPermissionsGranted() here would navigate away with nothing accessible.
+        if (uris.isNotEmpty()) {
+            onPermissionsGranted()
+        }
     }
 
     Surface(

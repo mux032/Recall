@@ -14,6 +14,7 @@ import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import com.recall.app.data.nlp.VectorIndexBootstrapper
+import com.recall.app.data.repository.PermissionRepository
 import com.recall.app.data.service.ScreenshotContentObserver
 import com.recall.app.data.worker.BackgroundOcrWorker
 import com.recall.app.data.worker.IndexingPipelineWorker
@@ -48,6 +49,9 @@ class RecallApplication : Application(), Configuration.Provider {
 
     @Inject
     lateinit var embeddingGenerator: EmbeddingGenerator
+
+    @Inject
+    lateinit var permissionRepository: PermissionRepository
 
     private val applicationScope = MainScope()
 
@@ -179,15 +183,7 @@ class RecallApplication : Application(), Configuration.Provider {
         // Only enqueue if the app already has the storage permission.
         // On first launch the user hasn't seen the permission screen yet — skip here;
         // MainActivity.startInitialDeepScan() will enqueue after the grant callback.
-        val hasPermission = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
-            checkSelfPermission(android.Manifest.permission.READ_MEDIA_IMAGES) ==
-                android.content.pm.PackageManager.PERMISSION_GRANTED
-        } else {
-            checkSelfPermission(android.Manifest.permission.READ_EXTERNAL_STORAGE) ==
-                android.content.pm.PackageManager.PERMISSION_GRANTED
-        }
-
-        if (!hasPermission) {
+        if (!permissionRepository.hasActualPermission()) {
             Log.i(TAG, "Skipping launch-time scan — storage permission not yet granted")
             return
         }

@@ -29,6 +29,7 @@ class ScreenshotRepositoryImpl @Inject constructor(
     private val screenshotDao: ScreenshotDao,
     private val ocrProcessor: OcrProcessor,
     private val embeddingGenerator: EmbeddingGenerator,
+    private val permissionRepository: PermissionRepository,
     @ApplicationContext private val context: Context
 ) : ScreenshotRepository {
 
@@ -221,30 +222,8 @@ class ScreenshotRepositoryImpl @Inject constructor(
         var skippedCount = 0
         var errorCount = 0
 
-        // Check permissions first
-        val hasPermission = when {
-            Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU -> {
-                // API 33+: READ_MEDIA_IMAGES
-                context.checkSelfPermission(android.Manifest.permission.READ_MEDIA_IMAGES) ==
-                    android.content.pm.PackageManager.PERMISSION_GRANTED
-            }
-            Build.VERSION.SDK_INT >= Build.VERSION_CODES.S -> {
-                // API 31-32 (Android 12, 12L): READ_EXTERNAL_STORAGE still required
-                context.checkSelfPermission(android.Manifest.permission.READ_EXTERNAL_STORAGE) ==
-                    android.content.pm.PackageManager.PERMISSION_GRANTED
-            }
-            Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q -> {
-                // API 29-30 (Android 10, 11): MediaStore access requires no runtime permission
-                true
-            }
-            else -> {
-                // API 26-28: READ_EXTERNAL_STORAGE required
-                context.checkSelfPermission(android.Manifest.permission.READ_EXTERNAL_STORAGE) ==
-                    android.content.pm.PackageManager.PERMISSION_GRANTED
-            }
-        }
-
-        if (!hasPermission) {
+        // Delegate to PermissionRepository — single source of truth for all API levels
+        if (!permissionRepository.hasActualPermission()) {
             Log.e(TAG, "Missing required storage permission")
             return 0
         }
