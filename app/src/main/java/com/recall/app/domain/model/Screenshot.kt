@@ -26,7 +26,7 @@ data class Screenshot(
     val isUserEdited: Boolean = false,
     val userEditedAt: Long? = null,
     val ocrRetryCount: Int = 0,
-    val processingState: String = "PENDING"
+    val processingState: String = "OCR_PENDING"
 ) {
     // Helper property to convert between String and ProcessingState
     val processingStateEnum: ProcessingState

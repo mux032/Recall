@@ -229,23 +229,23 @@ class BackgroundOcrWorker @AssistedInject constructor(
             val embedding = embeddingGenerator.generate(extractedText)
 
             if (embedding != null) {
-                // Full success — OCR text + embedding ready → mark Done
+                // Full success — OCR text + embedding ready → mark OcrEmbCompleted
                 screenshotDao.update(screenshot.copy(
                     ocrText = extractedText,
                     embeddingByteArray = floatToByteArray(embedding),
-                    processingState = ProcessingState.Done,
+                    processingState = ProcessingState.OcrEmbCompleted,
                     ocrRetryCount = 0
                 ))
                 screenshotDao.rebuildFtsIndex()
                 Log.i(TAG, "Saved OCR + embedding for: ${screenshot.fileName}")
             } else {
-                // Embedding failed (model unavailable / OOM) — save OCR text but stay Pending
-                // so Pass 2 can retry the embedding on the next worker run.
+                // Embedding failed (model unavailable / OOM) — save OCR text with OcrCompleted
+                // so Pass 2 can pick it up via getEmbeddingPendingScreenshots() next run.
                 Log.w(TAG, "Embedding returned null for ${screenshot.fileName} — saving OCR only, will retry embedding")
                 screenshotDao.update(screenshot.copy(
                     ocrText = extractedText,
                     embeddingByteArray = null,
-                    processingState = ProcessingState.Pending,
+                    processingState = ProcessingState.OcrCompleted,
                     ocrRetryCount = 0
                 ))
                 screenshotDao.rebuildFtsIndex()
@@ -276,7 +276,7 @@ class BackgroundOcrWorker @AssistedInject constructor(
             if (embedding != null) {
                 screenshotDao.update(screenshot.copy(
                     embeddingByteArray = floatToByteArray(embedding),
-                    processingState = ProcessingState.Done,
+                    processingState = ProcessingState.OcrEmbCompleted,
                     embeddingRetryCount = 0
                 ))
                 screenshotDao.rebuildFtsIndex()

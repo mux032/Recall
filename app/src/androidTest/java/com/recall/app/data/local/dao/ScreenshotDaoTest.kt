@@ -52,7 +52,7 @@ class ScreenshotDaoTest {
             ocrText = "Sample Extracted Text",
             category = "Testing",
             tagsJson = "tag1,tag2",
-            processingState = ProcessingState.Done
+            processingState = ProcessingState.OcrEmbCompleted
         )
         screenshotDao.insert(screenshot)
 
@@ -79,7 +79,7 @@ class ScreenshotDaoTest {
             ocrText = null,
             category = "Other",
             tagsJson = "",
-            processingState = ProcessingState.Pending
+            processingState = ProcessingState.OcrPending
         )
         screenshotDao.insert(screenshot)
         screenshotDao.deleteById("test-uuid-2")
@@ -107,7 +107,7 @@ class ScreenshotDaoTest {
             ocrText = "Instagram post from January 2025 showing travel photos",
             category = "Social",
             tagsJson = "",
-            processingState = ProcessingState.Done
+            processingState = ProcessingState.OcrEmbCompleted
         )
         screenshotDao.insert(screenshot)
 
@@ -131,7 +131,7 @@ class ScreenshotDaoTest {
             ocrText = "Total amount due: $42.99",
             category = "Finance",
             tagsJson = "",
-            processingState = ProcessingState.Done
+            processingState = ProcessingState.OcrEmbCompleted
         )
         screenshotDao.insert(screenshot)
 

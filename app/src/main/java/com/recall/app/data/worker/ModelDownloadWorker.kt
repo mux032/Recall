@@ -4,8 +4,12 @@ import android.content.Context
 import android.util.Log
 import androidx.hilt.work.HiltWorker
 import androidx.work.CoroutineWorker
+import androidx.work.ExistingWorkPolicy
+import androidx.work.OneTimeWorkRequestBuilder
+import androidx.work.WorkManager
 import androidx.work.WorkerParameters
 import androidx.work.workDataOf
+import com.recall.app.RecallApplication
 import com.recall.app.data.local.ModelDownloadState
 import com.recall.app.data.local.ModelRepository
 import dagger.assisted.Assisted
@@ -130,6 +134,16 @@ class ModelDownloadWorker @AssistedInject constructor(
                 modelRepository.setDownloadedModelPath(outputFile.absolutePath)
                 modelRepository.setDownloadProgress(1f)
                 modelRepository.setDownloadState(ModelDownloadState.READY)
+                // Trigger the indexing pipeline immediately so OCR_COMPLETED screenshots
+                // get their embeddings generated without waiting for the 6h periodic worker.
+                WorkManager.getInstance(appContext).enqueueUniqueWork(
+                    IndexingPipelineWorker.PIPELINE_WORK_NAME,
+                    ExistingWorkPolicy.REPLACE,
+                    OneTimeWorkRequestBuilder<IndexingPipelineWorker>()
+                        .addTag(RecallApplication.INDEXING_TAG)
+                        .build()
+                )
+                Log.i(TAG, "Enqueued IndexingPipelineWorker to process OCR_COMPLETED screenshots")
                 Result.success()
             }
         } catch (e: Exception) {

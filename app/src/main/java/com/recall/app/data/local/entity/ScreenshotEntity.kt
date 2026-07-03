@@ -38,7 +38,7 @@ data class ScreenshotEntity(
     val category: String,
     val tagsJson: String,
     /** Stored as a String in the DB via [com.recall.app.data.local.converter.ProcessingStateConverter]. */
-    val processingState: ProcessingState = ProcessingState.Pending,
+    val processingState: ProcessingState = ProcessingState.OcrPending,
     @ColumnInfo(typeAffinity = ColumnInfo.BLOB)
     val embeddingByteArray: ByteArray? = null,
     val isUserEdited: Boolean = false,

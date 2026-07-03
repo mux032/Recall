@@ -29,10 +29,9 @@ interface ScreenshotDao {
     fun getRecentScreenshots(since: Long): Flow<List<ScreenshotEntity>>
 
     /**
-     * Pass 1 — Screenshots that still need OCR (and therefore also need an embedding).
+     * Pass 1 — Screenshots that still need OCR (state = OCR_PENDING).
      *
-     * Returns at most [limit] rows where [ScreenshotEntity.ocrText] is NULL and the
-     * retry counter has not been exhausted, ordered newest-first so the user sees
+     * Returns at most [limit] rows ordered newest-first so the user sees
      * recent screenshots indexed first.
      *
      * Filtering is done in SQL to avoid loading the full table into memory when
@@ -40,7 +39,7 @@ interface ScreenshotDao {
      */
     @Query("""
         SELECT * FROM screenshots
-        WHERE ocrText IS NULL
+        WHERE processingState = 'OCR_PENDING'
           AND isUserEdited = 0
           AND ocrRetryCount < :maxRetries
         ORDER BY dateCreated DESC
@@ -49,17 +48,17 @@ interface ScreenshotDao {
     suspend fun getOcrPendingScreenshots(limit: Int, maxRetries: Int): List<ScreenshotEntity>
 
     /**
-     * Pass 2 — Screenshots where OCR succeeded but embedding generation failed/was skipped.
+     * Pass 2 — Screenshots where OCR succeeded but embedding generation failed/was skipped
+     * (state = OCR_COMPLETED).
      *
-     * Returns at most [limit] rows where [ScreenshotEntity.ocrText] IS NOT NULL but
-     * [ScreenshotEntity.embeddingByteArray] IS NULL and the retry counter is below the
-     * threshold. These rows were left in a half-processed state (OCR done, no vector)
-     * and must be re-attempted with the embedding generator only — no re-OCR needed.
+     * Returns at most [limit] rows where [ScreenshotEntity.processingState] is OCR_COMPLETED
+     * and the embedding retry counter is below the threshold. These rows were left in a
+     * half-processed state (OCR done, no vector) and must be re-attempted with the embedding
+     * generator only — no re-OCR needed.
      */
     @Query("""
         SELECT * FROM screenshots
-        WHERE ocrText IS NOT NULL
-          AND embeddingByteArray IS NULL
+        WHERE processingState = 'OCR_COMPLETED'
           AND embeddingRetryCount < :maxEmbeddingRetries
         ORDER BY dateCreated DESC
         LIMIT :limit
@@ -67,20 +66,28 @@ interface ScreenshotDao {
     suspend fun getEmbeddingPendingScreenshots(limit: Int, maxEmbeddingRetries: Int): List<ScreenshotEntity>
 
     /**
-     * Returns the number of screenshots the pipeline will actually process on its next run:
-     * - PENDING state (not yet attempted), OR
-     * - FAILED with OCR retries remaining, OR
-     * - FAILED with embedding retries remaining (has ocrText but no embedding)
+     * Returns the number of screenshots the pipeline will actually process on its next run.
+     *
+     * Counts ONLY OCR_PENDING rows (not OCR_COMPLETED) — OCR_COMPLETED means "waiting for
+     * embedding model" and should NOT be counted as pending work for the self-chain loop.
+     * If OCR_COMPLETED rows were included here the pipeline would self-chain indefinitely
+     * when the model is absent.
      *
      * Excludes permanently exhausted failures so the self-chain loop terminates correctly.
      */
     @Query("""
         SELECT COUNT(*) FROM screenshots WHERE
-        processingState = 'PENDING'
+        processingState = 'OCR_PENDING'
         OR (processingState = 'FAILED' AND ocrRetryCount < :maxOcrRetries)
-        OR (processingState = 'FAILED' AND ocrText IS NOT NULL AND embeddingRetryCount < :maxEmbeddingRetries)
     """)
-    suspend fun getPendingCount(maxOcrRetries: Int, maxEmbeddingRetries: Int): Int
+    suspend fun getPendingCount(maxOcrRetries: Int): Int
+
+    /**
+     * Returns count of screenshots with OCR done but no embedding — used to trigger
+     * the pipeline when the model becomes available.
+     */
+    @Query("SELECT COUNT(*) FROM screenshots WHERE processingState = 'OCR_COMPLETED'")
+    suspend fun getOcrCompletedCount(): Int
 
     /**
      * Returns a single page of screenshots ordered newest first.
@@ -129,14 +136,14 @@ interface ScreenshotDao {
      * Atomic update: Only updates if processingState matches expected value.
      * Returns number of rows updated (0 if no match, 1 if updated).
      * This prevents TOCTOU (Time-of-Check-Time-of-Use) race conditions.
-     * 
+     *
      * USER EDIT PROTECTION: Will not override OCR text if isUserEdited is true.
      */
     @Query("""
         UPDATE screenshots
         SET ocrText = :ocrText,
             embeddingByteArray = :embedding,
-            processingState = 'DONE',
+            processingState = 'OCR_EMB_COMPLETED',
             dateIndexed = :timestamp
         WHERE filePath = :filePath
           AND processingState = :expectedState
@@ -147,7 +154,7 @@ interface ScreenshotDao {
         ocrText: String?,
         embedding: ByteArray?,
         timestamp: Long,
-        expectedState: String = "PENDING"
+        expectedState: String = "OCR_PENDING"
     ): Int
 
     /**
@@ -234,7 +241,7 @@ interface ScreenshotDao {
     /**
      * Upsert: Insert new screenshot or update if exists (by filePath).
      * Uses atomic UPDATE with WHERE clause to prevent TOCTOU race conditions.
-     * Only updates if current processingState is PENDING and isUserEdited is false.
+     * Only updates if current processingState is OCR_PENDING and isUserEdited is false.
      *
      * USER EDIT PROTECTION: Will not override OCR text if isUserEdited is true.
      */
@@ -260,9 +267,9 @@ interface ScreenshotDao {
                     ocrText = ocrText,
                     embedding = embedding,
                     timestamp = timestamp,
-                    expectedState = "PENDING"
+                    expectedState = "OCR_PENDING"
                 )
-                
+
                 if (rowsUpdated > 0) {
                     Log.d(TAG, "OCR update succeeded: ${existing.id}")
                     // Rebuild FTS index after OCR update
@@ -285,7 +292,7 @@ interface ScreenshotDao {
                 ocrText = ocrText,
                 category = "Uncategorized",
                 tagsJson = "",
-                processingState = ProcessingState.Done,
+                processingState = ProcessingState.OcrEmbCompleted,
                 embeddingByteArray = embedding
             )
             insert(entity)
@@ -303,7 +310,7 @@ interface ScreenshotDao {
         SET ocrText = :editedOcrText,
             isUserEdited = 1,
             userEditedAt = :timestamp,
-            processingState = 'DONE'
+            processingState = 'OCR_EMB_COMPLETED'
         WHERE id = :id
     """)
     suspend fun saveUserEditedOcrText(

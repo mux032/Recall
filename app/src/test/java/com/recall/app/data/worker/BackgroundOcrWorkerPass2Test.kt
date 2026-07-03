@@ -48,7 +48,7 @@ class BackgroundOcrWorkerPass2Test {
         ocrText = "Hello World — valid OCR text",
         category = "Uncategorized",
         tagsJson = "",
-        processingState = ProcessingState.Pending,
+        processingState = ProcessingState.OcrPending,
         embeddingByteArray = null,
         ocrRetryCount = 0,
         embeddingRetryCount = 0
@@ -71,7 +71,7 @@ class BackgroundOcrWorkerPass2Test {
 
         val captor = argumentCaptor<ScreenshotEntity>()
         verify(screenshotDao).update(captor.capture())
-        assertEquals(ProcessingState.Done, captor.firstValue.processingState)
+        assertEquals(ProcessingState.OcrEmbCompleted, captor.firstValue.processingState)
         assertEquals(0, captor.firstValue.embeddingRetryCount)
     }
 
@@ -168,7 +168,7 @@ class BackgroundOcrWorkerPass2Test {
 
         val captor = argumentCaptor<ScreenshotEntity>()
         verify(screenshotDao).update(captor.capture())
-        assertEquals(ProcessingState.Done, captor.firstValue.processingState)
+        assertEquals(ProcessingState.OcrEmbCompleted, captor.firstValue.processingState)
     }
 }
 
@@ -194,7 +194,7 @@ internal class EmbeddingRetryLogic(
             if (embedding != null) {
                 screenshotDao.update(screenshot.copy(
                     embeddingByteArray = floatToByteArray(embedding),
-                    processingState = ProcessingState.Done,
+                    processingState = ProcessingState.OcrEmbCompleted,
                     embeddingRetryCount = 0
                 ))
                 screenshotDao.rebuildFtsIndex()

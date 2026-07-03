@@ -6,9 +6,11 @@ import com.recall.app.domain.model.ProcessingState
 /**
  * Room TypeConverter for [ProcessingState].
  *
- * Stores the enum as its [ProcessingState.value] string in the database (e.g. "PENDING", "DONE")
- * and converts it back to the sealed class on read. Unknown values fall back to [ProcessingState.Pending]
- * via [ProcessingState.fromValue] — the same safe behaviour as the old manual helper property.
+ * Stores the state as its [ProcessingState.value] string in the database
+ * (e.g. "OCR_PENDING", "OCR_COMPLETED", "OCR_EMB_COMPLETED", "FAILED")
+ * and converts it back to the sealed class on read. Unknown values — including
+ * legacy "PENDING", "DONE", and "PROCESSING" strings from older DB rows —
+ * fall back gracefully via [ProcessingState.fromValue].
  *
  * Registered on [com.recall.app.data.local.RecallDatabase] via [@TypeConverters].
  */

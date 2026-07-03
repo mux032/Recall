@@ -10,7 +10,7 @@ import org.junit.Test
  *
  * Verifies that the TypeConverter correctly serialises [ProcessingState] to its String
  * database representation and deserialises it back — including the safe fallback for
- * unknown values.
+ * unknown values and legacy migration from old state names.
  */
 class ProcessingStateConverterTest {
 
@@ -26,13 +26,18 @@ class ProcessingStateConverterTest {
     // -----------------------------------------------------------------------
 
     @Test
-    fun `fromProcessingState Pending returns PENDING`() {
-        assertEquals("PENDING", converter.fromProcessingState(ProcessingState.Pending))
+    fun `fromProcessingState OcrPending returns OCR_PENDING`() {
+        assertEquals("OCR_PENDING", converter.fromProcessingState(ProcessingState.OcrPending))
     }
 
     @Test
-    fun `fromProcessingState Done returns DONE`() {
-        assertEquals("DONE", converter.fromProcessingState(ProcessingState.Done))
+    fun `fromProcessingState OcrCompleted returns OCR_COMPLETED`() {
+        assertEquals("OCR_COMPLETED", converter.fromProcessingState(ProcessingState.OcrCompleted))
+    }
+
+    @Test
+    fun `fromProcessingState OcrEmbCompleted returns OCR_EMB_COMPLETED`() {
+        assertEquals("OCR_EMB_COMPLETED", converter.fromProcessingState(ProcessingState.OcrEmbCompleted))
     }
 
     @Test
@@ -40,23 +45,23 @@ class ProcessingStateConverterTest {
         assertEquals("FAILED", converter.fromProcessingState(ProcessingState.Failed))
     }
 
-    @Test
-    fun `fromProcessingState Processing returns PROCESSING`() {
-        assertEquals("PROCESSING", converter.fromProcessingState(ProcessingState.Processing))
-    }
-
     // -----------------------------------------------------------------------
-    // toProcessingState — String → enum
+    // toProcessingState — String → enum (current values)
     // -----------------------------------------------------------------------
 
     @Test
-    fun `toProcessingState PENDING returns Pending`() {
-        assertEquals(ProcessingState.Pending, converter.toProcessingState("PENDING"))
+    fun `toProcessingState OCR_PENDING returns OcrPending`() {
+        assertEquals(ProcessingState.OcrPending, converter.toProcessingState("OCR_PENDING"))
     }
 
     @Test
-    fun `toProcessingState DONE returns Done`() {
-        assertEquals(ProcessingState.Done, converter.toProcessingState("DONE"))
+    fun `toProcessingState OCR_COMPLETED returns OcrCompleted`() {
+        assertEquals(ProcessingState.OcrCompleted, converter.toProcessingState("OCR_COMPLETED"))
+    }
+
+    @Test
+    fun `toProcessingState OCR_EMB_COMPLETED returns OcrEmbCompleted`() {
+        assertEquals(ProcessingState.OcrEmbCompleted, converter.toProcessingState("OCR_EMB_COMPLETED"))
     }
 
     @Test
@@ -64,17 +69,31 @@ class ProcessingStateConverterTest {
         assertEquals(ProcessingState.Failed, converter.toProcessingState("FAILED"))
     }
 
+    // -----------------------------------------------------------------------
+    // Legacy value migration
+    // -----------------------------------------------------------------------
+
     @Test
-    fun `toProcessingState PROCESSING returns Processing`() {
-        assertEquals(ProcessingState.Processing, converter.toProcessingState("PROCESSING"))
+    fun `toProcessingState legacy PENDING migrates to OcrPending`() {
+        assertEquals(ProcessingState.OcrPending, converter.toProcessingState("PENDING"))
     }
 
     @Test
-    fun `toProcessingState unknown value falls back to Pending`() {
+    fun `toProcessingState legacy DONE migrates to OcrEmbCompleted`() {
+        assertEquals(ProcessingState.OcrEmbCompleted, converter.toProcessingState("DONE"))
+    }
+
+    @Test
+    fun `toProcessingState legacy PROCESSING migrates to OcrPending`() {
+        assertEquals(ProcessingState.OcrPending, converter.toProcessingState("PROCESSING"))
+    }
+
+    @Test
+    fun `toProcessingState unknown value falls back to OcrPending`() {
         // Unknown values (e.g. from a future schema or a typo) must not crash
-        assertEquals(ProcessingState.Pending, converter.toProcessingState("UNKNOWN"))
-        assertEquals(ProcessingState.Pending, converter.toProcessingState(""))
-        assertEquals(ProcessingState.Pending, converter.toProcessingState("pending")) // case-sensitive
+        assertEquals(ProcessingState.OcrPending, converter.toProcessingState("UNKNOWN"))
+        assertEquals(ProcessingState.OcrPending, converter.toProcessingState(""))
+        assertEquals(ProcessingState.OcrPending, converter.toProcessingState("ocr_pending")) // case-sensitive
     }
 
     // -----------------------------------------------------------------------
@@ -82,14 +101,20 @@ class ProcessingStateConverterTest {
     // -----------------------------------------------------------------------
 
     @Test
-    fun `round-trip Pending`() {
-        val original = ProcessingState.Pending
+    fun `round-trip OcrPending`() {
+        val original = ProcessingState.OcrPending
         assertEquals(original, converter.toProcessingState(converter.fromProcessingState(original)))
     }
 
     @Test
-    fun `round-trip Done`() {
-        val original = ProcessingState.Done
+    fun `round-trip OcrCompleted`() {
+        val original = ProcessingState.OcrCompleted
+        assertEquals(original, converter.toProcessingState(converter.fromProcessingState(original)))
+    }
+
+    @Test
+    fun `round-trip OcrEmbCompleted`() {
+        val original = ProcessingState.OcrEmbCompleted
         assertEquals(original, converter.toProcessingState(converter.fromProcessingState(original)))
     }
 
@@ -99,9 +124,22 @@ class ProcessingStateConverterTest {
         assertEquals(original, converter.toProcessingState(converter.fromProcessingState(original)))
     }
 
+    // -----------------------------------------------------------------------
+    // fromValue direct tests (legacy migration regression guard)
+    // -----------------------------------------------------------------------
+
     @Test
-    fun `round-trip Processing`() {
-        val original = ProcessingState.Processing
-        assertEquals(original, converter.toProcessingState(converter.fromProcessingState(original)))
+    fun `fromValue PENDING returns OcrPending`() {
+        assertEquals(ProcessingState.OcrPending, ProcessingState.fromValue("PENDING"))
+    }
+
+    @Test
+    fun `fromValue DONE returns OcrEmbCompleted`() {
+        assertEquals(ProcessingState.OcrEmbCompleted, ProcessingState.fromValue("DONE"))
+    }
+
+    @Test
+    fun `fromValue PROCESSING returns OcrPending`() {
+        assertEquals(ProcessingState.OcrPending, ProcessingState.fromValue("PROCESSING"))
     }
 }

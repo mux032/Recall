@@ -65,7 +65,7 @@ class IndexingPipelineWorker @AssistedInject constructor(
         }
         Log.i(TAG, "MediaStore scan complete — discovered $discovered new screenshots")
 
-        val total = screenshotDao.getPendingCount(MAX_OCR_RETRIES, MAX_EMBEDDING_RETRIES)
+        val total = screenshotDao.getPendingCount(MAX_OCR_RETRIES)
         if (total == 0) {
             Log.i(TAG, "No pending screenshots — exiting")
             return Result.success()
@@ -144,7 +144,7 @@ class IndexingPipelineWorker @AssistedInject constructor(
         val finalCount = completedCount.get()
         _indexingProgress.value = IndexingProgress(finalCount, total)
 
-        val remaining = screenshotDao.getPendingCount(MAX_OCR_RETRIES, MAX_EMBEDDING_RETRIES)
+        val remaining = screenshotDao.getPendingCount(MAX_OCR_RETRIES)
 
         // Only self-chain if:
         //   1. Items still remain AND
@@ -284,9 +284,11 @@ class IndexingPipelineWorker @AssistedInject constructor(
                     ))
                     Log.w(TAG, "Embedding permanently failed for ${entity.fileName}")
                 } else {
+                    // OCR done but embedding model not yet available — stay OcrCompleted
+                    // so getEmbeddingPendingScreenshots() picks this up on the next run.
                     screenshotDao.update(entity.copy(
                         ocrText = ocrText,
-                        processingState = ProcessingState.Pending,
+                        processingState = ProcessingState.OcrCompleted,
                         embeddingRetryCount = newCount
                     ))
                 }
@@ -297,7 +299,7 @@ class IndexingPipelineWorker @AssistedInject constructor(
             screenshotDao.update(entity.copy(
                 ocrText = ocrText,
                 embeddingByteArray = floatToByteArray(embedding),
-                processingState = ProcessingState.Done,
+                processingState = ProcessingState.OcrEmbCompleted,
                 ocrRetryCount = 0,
                 embeddingRetryCount = 0
             ))
