@@ -65,7 +65,7 @@ class IndexingPipelineWorker @AssistedInject constructor(
         }
         Log.i(TAG, "MediaStore scan complete — discovered $discovered new screenshots")
 
-        val total = screenshotDao.getPendingCount(MAX_OCR_RETRIES)
+        val total = screenshotDao.getPendingCount(MAX_EMBEDDING_RETRIES)
         if (total == 0) {
             Log.i(TAG, "No pending screenshots — exiting")
             return Result.success()
@@ -144,7 +144,7 @@ class IndexingPipelineWorker @AssistedInject constructor(
         val finalCount = completedCount.get()
         _indexingProgress.value = IndexingProgress(finalCount, total)
 
-        val remaining = screenshotDao.getPendingCount(MAX_OCR_RETRIES)
+        val remaining = screenshotDao.getPendingCount(MAX_EMBEDDING_RETRIES)
 
         // Only self-chain if:
         //   1. Items still remain AND
@@ -209,6 +209,14 @@ class IndexingPipelineWorker @AssistedInject constructor(
                     scanChannel.send(entity)
                 }
 
+                // Cap sentIds size to prevent unbounded heap growth on large libraries
+                // (each UUID is ~36 bytes; 5000 entries ≈ ~1 MB including HashMap overhead).
+                // If the cap is hit, stop loading more and rely on self-chaining for the rest.
+                if (sentIds.size >= MAX_SENT_IDS_PER_RUN) {
+                    Log.i(TAG, "sentIds cap reached (${sentIds.size}) — will self-chain for remainder")
+                    break
+                }
+
                 // If both batches were smaller than the limit, no more rows remain
                 if (batch.size < SCAN_BATCH_SIZE && embeddingBatch.size < SCAN_BATCH_SIZE) break
             }
@@ -251,7 +259,15 @@ class IndexingPipelineWorker @AssistedInject constructor(
                 continue
             }
 
-            ocrChannel.send(OcrResult(entity, text))
+            // Persist OCR_COMPLETED immediately — crash-safe: if the process dies
+            // before embedding completes, the row stays OCR_COMPLETED (not OCR_PENDING)
+            // so it won't be re-OCR'd on the next pipeline run.
+            val ocrDoneEntity = entity.copy(
+                ocrText = text,
+                processingState = ProcessingState.OcrCompleted
+            )
+            screenshotDao.update(ocrDoneEntity)
+            ocrChannel.send(OcrResult(ocrDoneEntity, text))
         }
     }
 
@@ -366,6 +382,7 @@ class IndexingPipelineWorker @AssistedInject constructor(
         const val THERMAL_DELAY_MS = 30_000L
         const val MAX_OCR_RETRIES = BackgroundOcrWorker.MAX_OCR_RETRIES
         const val MAX_EMBEDDING_RETRIES = BackgroundOcrWorker.MAX_EMBEDDING_RETRIES
+        const val MAX_SENT_IDS_PER_RUN = 5_000 // ~1 MB heap ceiling for the sentIds set
 
         // Shared observable for UI components to observe overall indexing progress.
         // Reset to (0, 0) at the start of every doWork() run to prevent stale values

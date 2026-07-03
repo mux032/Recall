@@ -138,7 +138,7 @@ class ModelDownloadWorker @AssistedInject constructor(
                 // get their embeddings generated without waiting for the 6h periodic worker.
                 WorkManager.getInstance(appContext).enqueueUniqueWork(
                     IndexingPipelineWorker.PIPELINE_WORK_NAME,
-                    ExistingWorkPolicy.REPLACE,
+                    ExistingWorkPolicy.KEEP,
                     OneTimeWorkRequestBuilder<IndexingPipelineWorker>()
                         .addTag(RecallApplication.INDEXING_TAG)
                         .build()

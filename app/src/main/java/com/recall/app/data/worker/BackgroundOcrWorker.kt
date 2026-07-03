@@ -59,7 +59,7 @@ class BackgroundOcrWorker @AssistedInject constructor(
 
                 val batches = ocrPending.chunked(BATCH_SIZE)
                 for ((batchIndex, batch) in batches.withIndex()) {
-                    if (isStopped()) {
+                    if (isStopped) {
                         Log.w(TAG, "Worker stopped during Pass 1 batch ${batchIndex + 1}")
                         return@withContext Result.retry()
                     }
@@ -107,7 +107,7 @@ class BackgroundOcrWorker @AssistedInject constructor(
                     Log.i(TAG, "Pass 2: ${embeddingPending.size} screenshots need embedding only")
 
                     for (screenshot in embeddingPending) {
-                        if (isStopped()) {
+                        if (isStopped) {
                             Log.w(TAG, "Worker stopped during Pass 2")
                             return@withContext Result.retry()
                         }

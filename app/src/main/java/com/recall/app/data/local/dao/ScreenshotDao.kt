@@ -78,9 +78,9 @@ interface ScreenshotDao {
     @Query("""
         SELECT COUNT(*) FROM screenshots WHERE
         processingState = 'OCR_PENDING'
-        OR (processingState = 'FAILED' AND ocrRetryCount < :maxOcrRetries)
+        OR (processingState = 'OCR_COMPLETED' AND embeddingRetryCount < :maxEmbeddingRetries)
     """)
-    suspend fun getPendingCount(maxOcrRetries: Int): Int
+    suspend fun getPendingCount(maxEmbeddingRetries: Int): Int
 
     /**
      * Returns count of screenshots with OCR done but no embedding — used to trigger
@@ -280,7 +280,15 @@ interface ScreenshotDao {
                 existing.id
             }
         } else {
-            // Insert new
+            // Insert new — derive correct initial state from what data is actually present.
+            // Never blindly set OcrEmbCompleted; doing so permanently excludes the row from
+            // getOcrPendingScreenshots() and getEmbeddingPendingScreenshots(), making the
+            // screenshot un-searchable if OCR or embedding was absent or failed silently.
+            val initialState = when {
+                ocrText != null && embedding != null -> ProcessingState.OcrEmbCompleted
+                ocrText != null -> ProcessingState.OcrCompleted
+                else -> ProcessingState.OcrPending
+            }
             val entity = ScreenshotEntity(
                 id = java.util.UUID.randomUUID().toString(),
                 filePath = filePath,
@@ -292,7 +300,7 @@ interface ScreenshotDao {
                 ocrText = ocrText,
                 category = "Uncategorized",
                 tagsJson = "",
-                processingState = ProcessingState.OcrEmbCompleted,
+                processingState = initialState,
                 embeddingByteArray = embedding
             )
             insert(entity)
