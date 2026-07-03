@@ -214,9 +214,9 @@ class BackgroundOcrWorker @AssistedInject constructor(
      *
      * Takes the [extractedText] from [runOcrForScreenshot] and:
      * 1. Generates an ONNX embedding vector
-     * 2. If embedding succeeds → saves ocrText + embedding + [ProcessingState.Done]
+     * 2. If embedding succeeds → saves ocrText + embedding + [ProcessingState.OcrEmbCompleted]
      * 3. If embedding returns null (model not loaded, OOM, etc.) → saves ocrText only,
-     *    leaves [ProcessingState.Pending] so the row appears in [getEmbeddingPendingScreenshots]
+     *    sets [ProcessingState.OcrCompleted] so the row appears in [getEmbeddingPendingScreenshots]
      *    and is picked up by Pass 2 on the next worker run.
      *
      * If [extractedText] is null, Phase 1 already handled the failure (retry count incremented)
@@ -261,7 +261,7 @@ class BackgroundOcrWorker @AssistedInject constructor(
      * Pass 2 — Retry embedding for a row that already has [ScreenshotEntity.ocrText]
      * but is missing [ScreenshotEntity.embeddingByteArray].
      *
-     * Does not re-run OCR. On success saves embedding + [ProcessingState.Done] and
+     * Does not re-run OCR. On success saves embedding + [ProcessingState.OcrEmbCompleted] and
      * resets [ScreenshotEntity.embeddingRetryCount] to 0.
      * On failure increments [ScreenshotEntity.embeddingRetryCount] — intentionally
      * separate from [ScreenshotEntity.ocrRetryCount] so that transient embedding errors

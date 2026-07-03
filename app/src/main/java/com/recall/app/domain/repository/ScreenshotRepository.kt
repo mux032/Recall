@@ -47,7 +47,7 @@ interface ScreenshotRepository {
 
     /**
      * Scans MediaStore for images in screenshot directories and inserts any
-     * newly discovered files into the database as [ProcessingState.Pending] rows.
+     * newly discovered files into the database as [ProcessingState.OcrPending] rows.
      *
      * @return the number of new screenshots added to the database.
      */
