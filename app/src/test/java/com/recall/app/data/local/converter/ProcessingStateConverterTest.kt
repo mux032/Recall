@@ -8,9 +8,9 @@ import org.junit.Test
 /**
  * Unit tests for [ProcessingStateConverter].
  *
- * Verifies that the TypeConverter correctly serialises [ProcessingState] to its String
- * database representation and deserialises it back — including the safe fallback for
- * unknown values and legacy migration from old state names.
+ * Verifies that the TypeConverter correctly serialises [ProcessingState] to its compact
+ * integer database representation and deserialises it back — including the safe fallback
+ * for unknown values and legacy String migration via [ProcessingState.fromValue].
  */
 class ProcessingStateConverterTest {
 
@@ -22,78 +22,70 @@ class ProcessingStateConverterTest {
     }
 
     // -----------------------------------------------------------------------
-    // fromProcessingState — enum → String
+    // fromProcessingState — sealed class → Int
     // -----------------------------------------------------------------------
 
     @Test
-    fun `fromProcessingState OcrPending returns OCR_PENDING`() {
-        assertEquals("OCR_PENDING", converter.fromProcessingState(ProcessingState.OcrPending))
+    fun `fromProcessingState OcrPending returns 0`() {
+        assertEquals(0, converter.fromProcessingState(ProcessingState.OcrPending))
     }
 
     @Test
-    fun `fromProcessingState OcrCompleted returns OCR_COMPLETED`() {
-        assertEquals("OCR_COMPLETED", converter.fromProcessingState(ProcessingState.OcrCompleted))
+    fun `fromProcessingState OcrCompleted returns 1`() {
+        assertEquals(1, converter.fromProcessingState(ProcessingState.OcrCompleted))
     }
 
     @Test
-    fun `fromProcessingState OcrEmbCompleted returns OCR_EMB_COMPLETED`() {
-        assertEquals("OCR_EMB_COMPLETED", converter.fromProcessingState(ProcessingState.OcrEmbCompleted))
+    fun `fromProcessingState OcrEmbCompleted returns 2`() {
+        assertEquals(2, converter.fromProcessingState(ProcessingState.OcrEmbCompleted))
     }
 
     @Test
-    fun `fromProcessingState Failed returns FAILED`() {
-        assertEquals("FAILED", converter.fromProcessingState(ProcessingState.Failed))
-    }
-
-    // -----------------------------------------------------------------------
-    // toProcessingState — String → enum (current values)
-    // -----------------------------------------------------------------------
-
-    @Test
-    fun `toProcessingState OCR_PENDING returns OcrPending`() {
-        assertEquals(ProcessingState.OcrPending, converter.toProcessingState("OCR_PENDING"))
-    }
-
-    @Test
-    fun `toProcessingState OCR_COMPLETED returns OcrCompleted`() {
-        assertEquals(ProcessingState.OcrCompleted, converter.toProcessingState("OCR_COMPLETED"))
-    }
-
-    @Test
-    fun `toProcessingState OCR_EMB_COMPLETED returns OcrEmbCompleted`() {
-        assertEquals(ProcessingState.OcrEmbCompleted, converter.toProcessingState("OCR_EMB_COMPLETED"))
-    }
-
-    @Test
-    fun `toProcessingState FAILED returns Failed`() {
-        assertEquals(ProcessingState.Failed, converter.toProcessingState("FAILED"))
+    fun `fromProcessingState Failed returns 3`() {
+        assertEquals(3, converter.fromProcessingState(ProcessingState.Failed))
     }
 
     // -----------------------------------------------------------------------
-    // Legacy value migration
+    // toProcessingState — Int → sealed class (current values)
     // -----------------------------------------------------------------------
 
     @Test
-    fun `toProcessingState legacy PENDING migrates to OcrPending`() {
-        assertEquals(ProcessingState.OcrPending, converter.toProcessingState("PENDING"))
+    fun `toProcessingState 0 returns OcrPending`() {
+        assertEquals(ProcessingState.OcrPending, converter.toProcessingState(0))
     }
 
     @Test
-    fun `toProcessingState legacy DONE migrates to OcrEmbCompleted`() {
-        assertEquals(ProcessingState.OcrEmbCompleted, converter.toProcessingState("DONE"))
+    fun `toProcessingState 1 returns OcrCompleted`() {
+        assertEquals(ProcessingState.OcrCompleted, converter.toProcessingState(1))
     }
 
     @Test
-    fun `toProcessingState legacy PROCESSING migrates to OcrPending`() {
-        assertEquals(ProcessingState.OcrPending, converter.toProcessingState("PROCESSING"))
+    fun `toProcessingState 2 returns OcrEmbCompleted`() {
+        assertEquals(ProcessingState.OcrEmbCompleted, converter.toProcessingState(2))
+    }
+
+    @Test
+    fun `toProcessingState 3 returns Failed`() {
+        assertEquals(ProcessingState.Failed, converter.toProcessingState(3))
     }
 
     @Test
     fun `toProcessingState unknown value falls back to OcrPending`() {
-        // Unknown values (e.g. from a future schema or a typo) must not crash
-        assertEquals(ProcessingState.OcrPending, converter.toProcessingState("UNKNOWN"))
-        assertEquals(ProcessingState.OcrPending, converter.toProcessingState(""))
-        assertEquals(ProcessingState.OcrPending, converter.toProcessingState("ocr_pending")) // case-sensitive
+        // Unknown int values must not crash — safe fallback to OcrPending
+        assertEquals(ProcessingState.OcrPending, converter.toProcessingState(99))
+        assertEquals(ProcessingState.OcrPending, converter.toProcessingState(-1))
+    }
+
+    // -----------------------------------------------------------------------
+    // Named constants are stable
+    // -----------------------------------------------------------------------
+
+    @Test
+    fun `VAL constants match sealed object values`() {
+        assertEquals(ProcessingState.VAL_OCR_PENDING,       ProcessingState.OcrPending.value)
+        assertEquals(ProcessingState.VAL_OCR_COMPLETED,     ProcessingState.OcrCompleted.value)
+        assertEquals(ProcessingState.VAL_OCR_EMB_COMPLETED, ProcessingState.OcrEmbCompleted.value)
+        assertEquals(ProcessingState.VAL_FAILED,            ProcessingState.Failed.value)
     }
 
     // -----------------------------------------------------------------------
@@ -125,21 +117,41 @@ class ProcessingStateConverterTest {
     }
 
     // -----------------------------------------------------------------------
-    // fromValue direct tests (legacy migration regression guard)
+    // Legacy String migration regression guard (ProcessingState.fromValue(String))
     // -----------------------------------------------------------------------
 
     @Test
-    fun `fromValue PENDING returns OcrPending`() {
+    fun `fromValue String PENDING returns OcrPending`() {
         assertEquals(ProcessingState.OcrPending, ProcessingState.fromValue("PENDING"))
     }
 
     @Test
-    fun `fromValue DONE returns OcrEmbCompleted`() {
+    fun `fromValue String DONE returns OcrEmbCompleted`() {
         assertEquals(ProcessingState.OcrEmbCompleted, ProcessingState.fromValue("DONE"))
     }
 
     @Test
-    fun `fromValue PROCESSING returns OcrPending`() {
+    fun `fromValue String PROCESSING returns OcrPending`() {
         assertEquals(ProcessingState.OcrPending, ProcessingState.fromValue("PROCESSING"))
+    }
+
+    @Test
+    fun `fromValue String OCR_PENDING returns OcrPending`() {
+        assertEquals(ProcessingState.OcrPending, ProcessingState.fromValue("OCR_PENDING"))
+    }
+
+    @Test
+    fun `fromValue String OCR_COMPLETED returns OcrCompleted`() {
+        assertEquals(ProcessingState.OcrCompleted, ProcessingState.fromValue("OCR_COMPLETED"))
+    }
+
+    @Test
+    fun `fromValue String OCR_EMB_COMPLETED returns OcrEmbCompleted`() {
+        assertEquals(ProcessingState.OcrEmbCompleted, ProcessingState.fromValue("OCR_EMB_COMPLETED"))
+    }
+
+    @Test
+    fun `fromValue String unknown falls back to OcrPending`() {
+        assertEquals(ProcessingState.OcrPending, ProcessingState.fromValue("UNKNOWN_GARBAGE"))
     }
 }

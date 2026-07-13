@@ -13,11 +13,7 @@ import kotlinx.coroutines.flow.Flow
 
 @Dao
 interface ScreenshotDao {
-    /**
-     * CRITICAL FIX: Removed "GROUP BY id" which was meaningless since id is PRIMARY KEY.
-     * Every row already has a unique id, so GROUP BY did nothing.
-     * The unique index on filePath in ScreenshotEntity now prevents duplicates at DB level.
-     */
+
     @Query("SELECT * FROM screenshots ORDER BY dateCreated DESC")
     fun getAllScreenshots(): Flow<List<ScreenshotEntity>>
 
@@ -29,17 +25,17 @@ interface ScreenshotDao {
     fun getRecentScreenshots(since: Long): Flow<List<ScreenshotEntity>>
 
     /**
-     * Pass 1 — Screenshots that still need OCR (state = OCR_PENDING).
+     * Pass 1 — Screenshots that still need OCR (state = 0 / OcrPending).
      *
      * Returns at most [limit] rows ordered newest-first so the user sees
      * recent screenshots indexed first.
      *
      * Filtering is done in SQL to avoid loading the full table into memory when
-     * there is a large backlog (e.g. 1 742 rows).
+     * there is a large backlog.
      */
     @Query("""
         SELECT * FROM screenshots
-        WHERE processingState = 'OCR_PENDING'
+        WHERE processingState = ${ProcessingState.VAL_OCR_PENDING}
           AND isUserEdited = 0
           AND ocrRetryCount < :maxRetries
         ORDER BY dateCreated DESC
@@ -49,16 +45,17 @@ interface ScreenshotDao {
 
     /**
      * Pass 2 — Screenshots where OCR succeeded but embedding generation failed/was skipped
-     * (state = OCR_COMPLETED).
+     * (state = 1 / OcrCompleted).
      *
-     * Returns at most [limit] rows where [ScreenshotEntity.processingState] is OCR_COMPLETED
-     * and the embedding retry counter is below the threshold. These rows were left in a
-     * half-processed state (OCR done, no vector) and must be re-attempted with the embedding
+     * Returns at most [limit] rows that must be re-attempted with the embedding
      * generator only — no re-OCR needed.
+     * Excludes user-edited rows for safety (their text is preserved, but embedding
+     * retries are still safe; kept consistent with Pass 1 for simplicity).
      */
     @Query("""
         SELECT * FROM screenshots
-        WHERE processingState = 'OCR_COMPLETED'
+        WHERE processingState = ${ProcessingState.VAL_OCR_COMPLETED}
+          AND isUserEdited = 0
           AND embeddingRetryCount < :maxEmbeddingRetries
         ORDER BY dateCreated DESC
         LIMIT :limit
@@ -66,27 +63,28 @@ interface ScreenshotDao {
     suspend fun getEmbeddingPendingScreenshots(limit: Int, maxEmbeddingRetries: Int): List<ScreenshotEntity>
 
     /**
-     * Returns the number of screenshots the pipeline will actually process on its next run.
+     * Returns the number of screenshots the pipeline will process on its next run.
      *
-     * Counts ONLY OCR_PENDING rows (not OCR_COMPLETED) — OCR_COMPLETED means "waiting for
-     * embedding model" and should NOT be counted as pending work for the self-chain loop.
-     * If OCR_COMPLETED rows were included here the pipeline would self-chain indefinitely
-     * when the model is absent.
+     * Counts ONLY OcrPending rows (state = 0) — OcrCompleted means "waiting for
+     * embedding model" and must NOT be counted as pending work for the self-chain loop.
+     * Including OcrCompleted rows here would cause the pipeline to self-chain indefinitely
+     * when the ONNX model is absent.
      *
-     * Excludes permanently exhausted failures so the self-chain loop terminates correctly.
+     * Excludes permanently exhausted failures and user-edited rows.
      */
     @Query("""
-        SELECT COUNT(*) FROM screenshots WHERE
-        processingState = 'OCR_PENDING'
-        OR (processingState = 'OCR_COMPLETED' AND embeddingRetryCount < :maxEmbeddingRetries)
+        SELECT COUNT(*) FROM screenshots
+        WHERE processingState = ${ProcessingState.VAL_OCR_PENDING}
+          AND isUserEdited = 0
+          AND ocrRetryCount < :maxOcrRetries
     """)
-    suspend fun getPendingCount(maxEmbeddingRetries: Int): Int
+    suspend fun getPendingCount(maxOcrRetries: Int): Int
 
     /**
      * Returns count of screenshots with OCR done but no embedding — used to trigger
      * the pipeline when the model becomes available.
      */
-    @Query("SELECT COUNT(*) FROM screenshots WHERE processingState = 'OCR_COMPLETED'")
+    @Query("SELECT COUNT(*) FROM screenshots WHERE processingState = ${ProcessingState.VAL_OCR_COMPLETED}")
     suspend fun getOcrCompletedCount(): Int
 
     /**
@@ -99,17 +97,13 @@ interface ScreenshotDao {
     @Query("SELECT * FROM screenshots ORDER BY dateCreated DESC LIMIT :limit OFFSET :offset")
     suspend fun getScreenshotPage(limit: Int, offset: Int): List<ScreenshotEntity>
 
-    /**
-     * Returns the total number of screenshots in the database.
-     * Used to determine when all pages have been loaded.
-     */
+    /** Returns the total number of screenshots in the database. */
     @Query("SELECT COUNT(*) FROM screenshots")
     suspend fun getScreenshotCount(): Int
 
     /**
      * Reactive count — Room re-emits whenever the screenshots table changes.
-     * Used by [HomeViewModel] to detect new rows inserted by [ScanExistingWorker]
-     * and trigger a list refresh so screenshots appear immediately.
+     * Used by [HomeViewModel] to detect new rows and trigger a list refresh.
      */
     @Query("SELECT COUNT(*) FROM screenshots")
     fun getScreenshotCountFlow(): Flow<Int>
@@ -121,10 +115,8 @@ interface ScreenshotDao {
     suspend fun getScreenshotByPath(filePath: String): ScreenshotEntity?
 
     /**
-     * CRITICAL PERFORMANCE FIX: Returns all screenshot file paths for O(1) lookup.
-     * Used to prevent N+1 query problem when scanning MediaStore.
-     * Instead of querying DB for each screenshot (500 screenshots = 500 queries),
-     * we load all paths once and use HashSet.contains() for O(1) lookup.
+     * Returns all screenshot file paths for O(1) lookup during MediaStore scan.
+     * Avoids the N+1 query problem: load all paths once, use HashSet.contains() per file.
      */
     @Query("SELECT filePath FROM screenshots")
     suspend fun getAllScreenshotPaths(): List<String>
@@ -133,9 +125,9 @@ interface ScreenshotDao {
     suspend fun getScreenshotsByIds(ids: List<String>): List<ScreenshotEntity>
 
     /**
-     * Atomic update: Only updates if processingState matches expected value.
+     * Atomic update: Only updates if processingState matches [expectedState].
      * Returns number of rows updated (0 if no match, 1 if updated).
-     * This prevents TOCTOU (Time-of-Check-Time-of-Use) race conditions.
+     * Prevents TOCTOU race conditions.
      *
      * USER EDIT PROTECTION: Will not override OCR text if isUserEdited is true.
      */
@@ -143,7 +135,7 @@ interface ScreenshotDao {
         UPDATE screenshots
         SET ocrText = :ocrText,
             embeddingByteArray = :embedding,
-            processingState = 'OCR_EMB_COMPLETED',
+            processingState = ${ProcessingState.VAL_OCR_EMB_COMPLETED},
             dateIndexed = :timestamp
         WHERE filePath = :filePath
           AND processingState = :expectedState
@@ -154,7 +146,7 @@ interface ScreenshotDao {
         ocrText: String?,
         embedding: ByteArray?,
         timestamp: Long,
-        expectedState: String = "OCR_PENDING"
+        expectedState: Int = ProcessingState.VAL_OCR_PENDING
     ): Int
 
     /**
@@ -171,8 +163,8 @@ interface ScreenshotDao {
     suspend fun searchFts(query: String): List<ScreenshotEntity>
 
     /**
-     * Rebuild the FTS index by updating all OCR texts.
-     * This is needed after destructive migrations or if FTS index gets corrupted.
+     * Rebuild the FTS index — touch all rows with OCR text so the FTS virtual table
+     * re-indexes them. Needed after batch inserts or if the FTS index gets out of sync.
      */
     @Query("""
         UPDATE screenshots
@@ -181,18 +173,9 @@ interface ScreenshotDao {
     """)
     suspend fun rebuildFtsIndex(): Int
 
-    /**
-     * Insert with IGNORE strategy to prevent crashes on duplicate filePath.
-     * Returns the row ID of inserted row, or -1 if insert failed due to conflict.
-     */
     @Insert(onConflict = OnConflictStrategy.IGNORE)
     suspend fun insert(screenshot: ScreenshotEntity): Long
 
-    /**
-     * Insert with REPLACE strategy - replaces existing record on conflict.
-     * Used for update operations where we want to overwrite existing data.
-     * Returns the row ID of inserted/replaced row.
-     */
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertOrReplace(screenshot: ScreenshotEntity): Long
 
@@ -202,11 +185,6 @@ interface ScreenshotDao {
     @Query("DELETE FROM screenshots WHERE id = :id")
     suspend fun deleteById(id: String)
 
-    /**
-     * Increment the OCR retry count for a screenshot.
-     * Used to track failed OCR attempts and prevent infinite retry loops.
-     * @return Number of rows updated (1 if successful, 0 if screenshot not found)
-     */
     @Query("""
         UPDATE screenshots
         SET ocrRetryCount = ocrRetryCount + 1
@@ -215,10 +193,9 @@ interface ScreenshotDao {
     suspend fun incrementOcrRetryCount(id: String): Int
 
     /**
-     * Increment the embedding retry count for a screenshot.
-     * Tracked separately from [incrementOcrRetryCount] so transient embedding failures
-     * (model not loaded, OOM) do not exhaust the OCR retry budget on rows that already
-     * have valid OCR text.
+     * Increment the embedding retry count separately from [incrementOcrRetryCount] so
+     * transient embedding failures (model not loaded, OOM) do not exhaust the OCR retry
+     * budget on rows that already have valid OCR text.
      */
     @Query("""
         UPDATE screenshots
@@ -227,10 +204,6 @@ interface ScreenshotDao {
     """)
     suspend fun incrementEmbeddingRetryCount(id: String): Int
 
-    /**
-     * Reset the OCR retry count for a screenshot after successful processing.
-     * Called when OCR succeeds to clear any previous failure count.
-     */
     @Query("""
         UPDATE screenshots
         SET ocrRetryCount = 0
@@ -240,39 +213,33 @@ interface ScreenshotDao {
 
     /**
      * Upsert: Insert new screenshot or update if exists (by filePath).
-     * Uses atomic UPDATE with WHERE clause to prevent TOCTOU race conditions.
-     * Only updates if current processingState is OCR_PENDING and isUserEdited is false.
-     *
-     * USER EDIT PROTECTION: Will not override OCR text if isUserEdited is true.
+     * Uses an atomic UPDATE with a state guard to prevent TOCTOU race conditions.
+     * Only updates if current processingState is OcrPending (0) and isUserEdited is false.
      */
-    @androidx.room.Transaction
+    @Transaction
     suspend fun insertOrUpdateWithOcr(
         filePath: String,
         ocrText: String?,
         embedding: ByteArray?,
         timestamp: Long = System.currentTimeMillis()
     ): String {
-        // Check if exists
         val existing = getScreenshotByPath(filePath)
 
         return if (existing != null) {
-            // Skip update if user has manually edited the text
             if (existing.isUserEdited) {
                 Log.d(TAG, "Skipping OCR update - user has edited this screenshot: ${existing.id}")
                 existing.id
             } else {
-                // Atomic update - returns 0 if state doesn't match (race condition prevented)
                 val rowsUpdated = updateIfProcessingState(
                     filePath = filePath,
                     ocrText = ocrText,
                     embedding = embedding,
                     timestamp = timestamp,
-                    expectedState = "OCR_PENDING"
+                    expectedState = ProcessingState.VAL_OCR_PENDING
                 )
 
                 if (rowsUpdated > 0) {
                     Log.d(TAG, "OCR update succeeded: ${existing.id}")
-                    // Rebuild FTS index after OCR update
                     rebuildFtsIndex()
                 } else {
                     Log.d(TAG, "OCR update skipped - state mismatch: ${existing.id}")
@@ -280,14 +247,10 @@ interface ScreenshotDao {
                 existing.id
             }
         } else {
-            // Insert new — derive correct initial state from what data is actually present.
-            // Never blindly set OcrEmbCompleted; doing so permanently excludes the row from
-            // getOcrPendingScreenshots() and getEmbeddingPendingScreenshots(), making the
-            // screenshot un-searchable if OCR or embedding was absent or failed silently.
             val initialState = when {
                 ocrText != null && embedding != null -> ProcessingState.OcrEmbCompleted
-                ocrText != null -> ProcessingState.OcrCompleted
-                else -> ProcessingState.OcrPending
+                ocrText != null                      -> ProcessingState.OcrCompleted
+                else                                 -> ProcessingState.OcrPending
             }
             val entity = ScreenshotEntity(
                 id = java.util.UUID.randomUUID().toString(),
@@ -311,14 +274,14 @@ interface ScreenshotDao {
     /**
      * Save user-edited OCR text.
      * Sets isUserEdited flag to prevent automatic OCR from overriding user edits.
-     * Single atomic UPDATE query - more efficient than SELECT + UPDATE.
+     * Marks the row as fully indexed (OcrEmbCompleted = 2) so it appears in search results.
      */
     @Query("""
         UPDATE screenshots
         SET ocrText = :editedOcrText,
             isUserEdited = 1,
             userEditedAt = :timestamp,
-            processingState = 'OCR_EMB_COMPLETED'
+            processingState = ${ProcessingState.VAL_OCR_EMB_COMPLETED}
         WHERE id = :id
     """)
     suspend fun saveUserEditedOcrText(

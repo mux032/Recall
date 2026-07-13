@@ -11,4 +11,11 @@
     <external-files-path
         name="external_app_files"
         path="." />
+    <!--
+        Grants FileProvider access to internal filesDir/crashes/ so crash report
+        .txt files can be shared via ACTION_SEND without exposing other app data.
+    -->
+    <files-path
+        name="crash_reports"
+        path="crashes/" />
 </paths>

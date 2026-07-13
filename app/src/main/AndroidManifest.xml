@@ -43,6 +43,12 @@
             </intent-filter>
         </activity>
 
+        <!-- Crash reporter — shown automatically after any uncaught exception -->
+        <activity
+            android:name=".presentation.ui.crash.CrashReportActivity"
+            android:exported="false"
+            android:theme="@style/Theme.Recall" />
+
         <!-- FileProvider for sharing screenshot files with other apps -->
         <provider
             android:name="androidx.core.content.FileProvider"
@@ -53,6 +59,19 @@
                 android:name="android.support.FILE_PROVIDER_PATHS"
                 android:resource="@xml/file_paths" />
         </provider>
+
+        <!--
+            WorkManager's SystemForegroundService must declare foregroundServiceType="dataSync"
+            in the app manifest on API 34+ (Android 14+). WorkManager itself passes
+            FOREGROUND_SERVICE_TYPE_DATA_SYNC when calling startForeground(), and Android now
+            strictly requires the declared type to be a superset of the requested type.
+            Without this, the app crashes immediately with:
+              IllegalArgumentException: foregroundServiceType 0x1 is not a subset of 0x0
+        -->
+        <service
+            android:name="androidx.work.impl.foreground.SystemForegroundService"
+            android:foregroundServiceType="dataSync"
+            tools:node="merge" />
 
         <!-- Hilt WorkManager initialization -->
         <provider

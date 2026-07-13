@@ -10,27 +10,13 @@ import com.recall.app.data.local.entity.FtsScreenshotEntity
 import com.recall.app.data.local.entity.ScreenshotEntity
 import com.recall.app.data.local.entity.SearchHistoryEntity
 
-/**
- * Recall Database
- *
- * ⚠️ DEVELOPMENT WARNING: This database uses fallbackToDestructiveMigration()
- * which WILL DELETE ALL DATA when upgrading between versions.
- *
- * Current version: 5 (added embeddingRetryCount column to ScreenshotEntity)
- * Previous version: 4 (ProcessingState TypeConverter — processingState column type unchanged)
- *
- * Before releasing to production:
- * - Create proper Room migrations for all entities
- * - Replace fallbackToDestructiveMigration() with explicit migrations
- * - Test migration path from version 1 to current version
- */
 @Database(
     entities = [
         ScreenshotEntity::class,
         FtsScreenshotEntity::class,
         SearchHistoryEntity::class
     ],
-    version = 5,
+    version = 1,
     exportSchema = false
 )
 @TypeConverters(ProcessingStateConverter::class)

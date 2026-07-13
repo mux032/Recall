@@ -112,6 +112,13 @@ class ScreenshotRepositoryImpl @Inject constructor(
             screenshot.ocrText
         }
 
+        // Preserve the existing processingState so callers that update non-pipeline fields
+        // (e.g. category, tags) do not accidentally promote a row out of the OCR pipeline.
+        // Only fall back to OcrEmbCompleted if there is no existing DB record (shouldn't happen
+        // for updates, but be safe) and no state is derivable from the domain model.
+        val preservedState = existingEntity?.processingState
+            ?: ProcessingState.fromValue(screenshot.processingState)
+
         val entity = ScreenshotEntity(
             id = screenshot.id,
             filePath = screenshot.filePath,
@@ -123,7 +130,7 @@ class ScreenshotRepositoryImpl @Inject constructor(
             ocrText = finalOcrText,  // Use preserved text
             category = screenshot.category,
             tagsJson = screenshot.tags.joinToString(","),
-            processingState = ProcessingState.OcrEmbCompleted,
+            processingState = preservedState,
             embeddingByteArray = floatArrayToByteArray(screenshot.embedding),
             isUserEdited = if (shouldPreserveUserEditedFlag) true else screenshot.isUserEdited,
             userEditedAt = if (shouldPreserveUserEditedFlag) existingEntity?.userEditedAt else screenshot.userEditedAt,
@@ -267,36 +274,7 @@ class ScreenshotRepositoryImpl @Inject constructor(
             )
         }
 
-        // Query ALL images first to debug what's available
-        Log.i(TAG, "=== Starting Screenshot Scan Debug ===")
-        Log.i(TAG, "Querying MediaStore at: $uri")
-
-        // First, query ALL images to see what's in MediaStore
-        val allImagesCount = try {
-            contentResolver.query(uri, projection, null, null, null)?.use { cursor ->
-                val count = cursor.count
-                Log.i(TAG, "Total images in MediaStore: $count")
-
-                // Log first 5 images for debugging
-                if (cursor.moveToFirst()) {
-                    val dataColumn = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.DATA)
-                    val relPathColumn = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.RELATIVE_PATH)
-                    var shown = 0
-                    do {
-                        if (shown < 5) {
-                            val path = cursor.getString(dataColumn) ?: "null"
-                            val relPath = cursor.getString(relPathColumn) ?: "null"
-                            Log.i(TAG, "Image $shown: PATH=$path, RELATIVE_PATH=$relPath")
-                            shown++
-                        }
-                    } while (cursor.moveToNext())
-                }
-                count
-            }
-        } catch (e: Exception) {
-            Log.e(TAG, "Error querying all images", e)
-            0
-        }
+        Log.d(TAG, "Starting screenshot scan")
 
         // Common screenshot directories across Android OEMs.
         // Ordered by prevalence — most common first.
@@ -318,8 +296,6 @@ class ScreenshotRepositoryImpl @Inject constructor(
                 val selection = "${MediaStore.Images.Media.RELATIVE_PATH} LIKE ?"
                 val selectionArgs = arrayOf("%$pattern%")
 
-                Log.d(TAG, "Scanning for screenshots with pattern: $selectionArgs[0]")
-
                 contentResolver.query(uri, projection, selection, selectionArgs, sortOrder)?.use { cursor ->
                     val dataColumn = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.DATA)
                     val nameColumn = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.DISPLAY_NAME)
@@ -332,13 +308,6 @@ class ScreenshotRepositoryImpl @Inject constructor(
                         cursor.getColumnIndexOrThrow(MediaStore.Images.Media.OWNER_PACKAGE_NAME)
                     } else {
                         -1
-                    }
-
-                    val cursorCount = cursor.count
-                    Log.i(TAG, "Pattern '$pattern' found $cursorCount matches in MediaStore")
-
-                    if (cursorCount == 0) {
-                        Log.w(TAG, "No matches for pattern: $pattern")
                     }
 
                     while (cursor.moveToNext()) {
@@ -355,8 +324,6 @@ class ScreenshotRepositoryImpl @Inject constructor(
                             } else {
                                 ""
                             }
-
-                            Log.d(TAG, "Processing: $fileName | Path: $filePath | RelPath: $relativePath")
 
                             // Skip if file doesn't exist
                             val file = java.io.File(filePath)
@@ -409,7 +376,6 @@ class ScreenshotRepositoryImpl @Inject constructor(
                             screenshotDao.insert(entity)
                             insertedThisRun.add(filePath)
                             addedCount++
-                            Log.i(TAG, "✓ Added screenshot: $fileName ($relativePath)")
                         } catch (e: Exception) {
                             errorCount++
                             Log.e(TAG, "Error processing cursor row", e)

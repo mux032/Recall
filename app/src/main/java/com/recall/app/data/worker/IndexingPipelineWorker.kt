@@ -27,9 +27,6 @@ import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.supervisorScope
 import java.nio.ByteBuffer
@@ -42,7 +39,8 @@ class IndexingPipelineWorker @AssistedInject constructor(
     private val screenshotDao: ScreenshotDao,
     private val screenshotRepository: ScreenshotRepository,
     private val ocrProcessor: OcrProcessor,
-    private val embeddingGenerator: EmbeddingGenerator
+    private val embeddingGenerator: EmbeddingGenerator,
+    private val progressRepository: IndexingProgressRepository
 ) : CoroutineWorker(appContext, workerParams) {
 
     private data class OcrResult(
@@ -52,7 +50,7 @@ class IndexingPipelineWorker @AssistedInject constructor(
 
     override suspend fun doWork(): Result {
         Log.i(TAG, "IndexingPipelineWorker started")
-        resetProgress() // clear stale progress from any prior run
+        progressRepository.reset() // clear stale progress from any prior run
 
         // Stage 0: Scan MediaStore for new screenshots not yet in the DB.
         // This replaces what ScanExistingWorker previously did before handing off to
@@ -81,7 +79,7 @@ class IndexingPipelineWorker @AssistedInject constructor(
             }
         }
 
-        _indexingProgress.value = IndexingProgress(0, total)
+        progressRepository.update(0, total)
 
         val scanChannel = Channel<ScreenshotEntity>(capacity = SCAN_CHANNEL_CAPACITY)
         val ocrChannel = Channel<OcrResult>(capacity = OCR_CHANNEL_CAPACITY)
@@ -129,7 +127,7 @@ class IndexingPipelineWorker @AssistedInject constructor(
                     launch(stageErrorHandler) {
                         runEmbeddingStage(ocrChannel) {
                             val done = completedCount.incrementAndGet()
-                            _indexingProgress.value = IndexingProgress(done, total)
+                            progressRepository.update(done, total)
                             if (total >= FOREGROUND_THRESHOLD) {
                                 try { setForeground(buildForegroundInfo(done, total)) } catch (_: Exception) {}
                             }
@@ -142,7 +140,7 @@ class IndexingPipelineWorker @AssistedInject constructor(
         }
 
         val finalCount = completedCount.get()
-        _indexingProgress.value = IndexingProgress(finalCount, total)
+        progressRepository.update(finalCount, total)
 
         val remaining = screenshotDao.getPendingCount(MAX_EMBEDDING_RETRIES)
 
@@ -383,15 +381,5 @@ class IndexingPipelineWorker @AssistedInject constructor(
         const val MAX_OCR_RETRIES = BackgroundOcrWorker.MAX_OCR_RETRIES
         const val MAX_EMBEDDING_RETRIES = BackgroundOcrWorker.MAX_EMBEDDING_RETRIES
         const val MAX_SENT_IDS_PER_RUN = 5_000 // ~1 MB heap ceiling for the sentIds set
-
-        // Shared observable for UI components to observe overall indexing progress.
-        // Reset to (0, 0) at the start of every doWork() run to prevent stale values
-        // from a prior run appearing when a new run begins.
-        private val _indexingProgress = MutableStateFlow(IndexingProgress(0, 0))
-        val indexingProgress: StateFlow<IndexingProgress> = _indexingProgress.asStateFlow()
-
-        internal fun resetProgress() {
-            _indexingProgress.value = IndexingProgress(0, 0)
-        }
     }
 }

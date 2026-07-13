@@ -79,7 +79,7 @@ fun ScreenshotEntity.toDomainModel(): Screenshot {
         isUserEdited = isUserEdited,
         userEditedAt = userEditedAt,
         ocrRetryCount = ocrRetryCount,
-        processingState = processingState.value,
+        processingState = processingState.value, // Int: 0=OcrPending,1=OcrCompleted,2=OcrEmbCompleted,3=Failed
         appName = appName
     )
 }

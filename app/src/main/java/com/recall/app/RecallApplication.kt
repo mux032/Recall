@@ -8,24 +8,20 @@ import android.provider.MediaStore
 import android.util.Log
 import androidx.hilt.work.HiltWorkerFactory
 import androidx.work.Configuration
-import androidx.work.ExistingPeriodicWorkPolicy
 import androidx.work.ExistingWorkPolicy
 import androidx.work.OneTimeWorkRequestBuilder
-import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import com.recall.app.data.nlp.VectorIndexBootstrapper
 import com.recall.app.data.repository.PermissionRepository
 import com.recall.app.data.service.ScreenshotContentObserver
-import com.recall.app.data.worker.BackgroundOcrWorker
 import com.recall.app.data.worker.IndexingPipelineWorker
-import com.recall.app.data.worker.ScanExistingWorker
 import com.recall.app.domain.usecase.EmbeddingGenerator
+import com.recall.app.util.CrashHandler
 import dagger.hilt.android.HiltAndroidApp
 import javax.inject.Inject
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.MainScope
 import kotlinx.coroutines.cancel
-import java.util.concurrent.TimeUnit
 
 @HiltAndroidApp
 class RecallApplication : Application(), Configuration.Provider {
@@ -65,6 +61,9 @@ class RecallApplication : Application(), Configuration.Provider {
     override fun onCreate() {
         super.onCreate()
 
+        // Register first — catches crashes that occur during the rest of startup
+        CrashHandler.register(this)
+
         createIndexingNotificationChannel()
 
         Log.i(TAG, "RecallApplication starting...")
@@ -79,9 +78,6 @@ class RecallApplication : Application(), Configuration.Provider {
             true,
             contentObserver
         )
-
-        // Schedule periodic background OCR processing
-        scheduleBackgroundOcrProcessing()
 
         // On every cold launch, scan for screenshots taken while the app was dead,
         // then run OCR on anything newly discovered or still pending.
@@ -119,35 +115,6 @@ class RecallApplication : Application(), Configuration.Provider {
         // Cancel the application scope to clean up coroutines
         applicationScope.cancel()
         Log.i(TAG, "Resource cleanup completed")
-    }
-
-    /**
-     * Schedules periodic background OCR processing for screenshots without extracted text.
-     * Runs every 6 hours, processing newest images first.
-     */
-    private fun scheduleBackgroundOcrProcessing() {
-        val workManager = WorkManager.getInstance(this)
-
-        val ocrWorkRequest = PeriodicWorkRequestBuilder<BackgroundOcrWorker>(
-            repeatInterval = 6L,
-            repeatIntervalTimeUnit = TimeUnit.HOURS
-        )
-            .setConstraints(
-                androidx.work.Constraints.Builder()
-                    .setRequiresBatteryNotLow(!BuildConfig.DEBUG) // Skip in debug
-                    .setRequiresCharging(false)
-                    .build()
-            )
-            .addTag("background_ocr")
-            .addTag(INDEXING_TAG)
-            .build()
-
-        // KEEP — preserves the existing schedule so cold launches don't reset the timer.
-        workManager.enqueueUniquePeriodicWork(
-            "background_ocr_work",
-            ExistingPeriodicWorkPolicy.KEEP,
-            ocrWorkRequest
-        )
     }
 
     /**
