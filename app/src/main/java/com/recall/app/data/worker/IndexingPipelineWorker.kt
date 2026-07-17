@@ -17,7 +17,7 @@ import androidx.work.WorkerParameters
 import com.recall.app.RecallApplication
 import com.recall.app.data.local.dao.ScreenshotDao
 import com.recall.app.data.local.entity.ScreenshotEntity
-import com.recall.app.domain.model.ProcessingState
+import com.recall.app.domain.model.PipelineFailureCode
 import com.recall.app.domain.repository.ScreenshotRepository
 import com.recall.app.domain.usecase.EmbeddingGenerator
 import com.recall.app.domain.usecase.OcrProcessor
@@ -63,7 +63,7 @@ class IndexingPipelineWorker @AssistedInject constructor(
         }
         Log.i(TAG, "MediaStore scan complete — discovered $discovered new screenshots")
 
-        val total = screenshotDao.getPendingCount(MAX_EMBEDDING_RETRIES)
+        val total = screenshotDao.getPendingCount(MAX_OCR_RETRIES, MAX_EMBEDDING_RETRIES)
         if (total == 0) {
             Log.i(TAG, "No pending screenshots — exiting")
             return Result.success()
@@ -142,7 +142,7 @@ class IndexingPipelineWorker @AssistedInject constructor(
         val finalCount = completedCount.get()
         progressRepository.update(finalCount, total)
 
-        val remaining = screenshotDao.getPendingCount(MAX_EMBEDDING_RETRIES)
+        val remaining = screenshotDao.getPendingCount(MAX_OCR_RETRIES, MAX_EMBEDDING_RETRIES)
 
         // Only self-chain if:
         //   1. Items still remain AND
@@ -156,7 +156,7 @@ class IndexingPipelineWorker @AssistedInject constructor(
         if (remaining > 0 && finalCount > 0 && !isStopped) {
             Log.i(TAG, "More items remain ($remaining) — self-chaining")
             val next = OneTimeWorkRequestBuilder<IndexingPipelineWorker>()
-                .addTag(RecallApplication.INDEXING_TAG)
+                .addTag(INDEXING_TAG)
                 .build()
             WorkManager.getInstance(appContext)
                 .enqueueUniqueWork(PIPELINE_WORK_NAME, ExistingWorkPolicy.KEEP, next)
@@ -246,10 +246,14 @@ class IndexingPipelineWorker @AssistedInject constructor(
                 null
             }
 
-            if (text == null) {
+            if (text.isNullOrBlank()) {
                 val newCount = entity.ocrRetryCount + 1
                 if (newCount >= MAX_OCR_RETRIES) {
-                    screenshotDao.update(entity.copy(processingState = ProcessingState.Failed, ocrRetryCount = newCount))
+                    // Single atomic write — avoids zombie row if process dies between two writes
+                    screenshotDao.update(entity.copy(
+                        ocrRetryCount = newCount,
+                        pipelineCode = PipelineFailureCode.OCR_FAILED
+                    ))
                     Log.w(TAG, "OCR permanently failed for ${entity.fileName}")
                 } else {
                     screenshotDao.incrementOcrRetryCount(entity.id)
@@ -257,13 +261,10 @@ class IndexingPipelineWorker @AssistedInject constructor(
                 continue
             }
 
-            // Persist OCR_COMPLETED immediately — crash-safe: if the process dies
-            // before embedding completes, the row stays OCR_COMPLETED (not OCR_PENDING)
-            // so it won't be re-OCR'd on the next pipeline run.
-            val ocrDoneEntity = entity.copy(
-                ocrText = text,
-                processingState = ProcessingState.OcrCompleted
-            )
+            // Persist ocrText immediately — crash-safe: if the process dies
+            // before embedding completes, the row has ocrText non-null so it won't
+            // be re-OCR'd on the next pipeline run (state derived from data).
+            val ocrDoneEntity = entity.copy(ocrText = text)
             screenshotDao.update(ocrDoneEntity)
             ocrChannel.send(OcrResult(ocrDoneEntity, text))
         }
@@ -291,32 +292,38 @@ class IndexingPipelineWorker @AssistedInject constructor(
             if (embedding == null) {
                 val newCount = entity.embeddingRetryCount + 1
                 if (newCount >= MAX_EMBEDDING_RETRIES) {
+                    // Single atomic write — avoids zombie row if process dies between two writes
                     screenshotDao.update(entity.copy(
                         ocrText = ocrText,
-                        processingState = ProcessingState.Failed,
-                        embeddingRetryCount = newCount
+                        embeddingRetryCount = newCount,
+                        pipelineCode = PipelineFailureCode.EMBEDDING_FAILED
                     ))
                     Log.w(TAG, "Embedding permanently failed for ${entity.fileName}")
                 } else {
-                    // OCR done but embedding model not yet available — stay OcrCompleted
-                    // so getEmbeddingPendingScreenshots() picks this up on the next run.
-                    screenshotDao.update(entity.copy(
-                        ocrText = ocrText,
-                        processingState = ProcessingState.OcrCompleted,
-                        embeddingRetryCount = newCount
-                    ))
+                    // OCR done but embedding model not yet available — ocrText is already
+                    // persisted; increment only the retry counter surgically to avoid
+                    // overwriting concurrent user edits (isUserEdited, corrected ocrText).
+                    screenshotDao.incrementEmbeddingRetryCount(entity.id)
                 }
                 onProgress()
                 continue
             }
 
-            screenshotDao.update(entity.copy(
-                ocrText = ocrText,
-                embeddingByteArray = floatToByteArray(embedding),
-                processingState = ProcessingState.OcrEmbCompleted,
-                ocrRetryCount = 0,
-                embeddingRetryCount = 0
-            ))
+            // Success — write embedding only if the user hasn't edited OCR text since
+            // this entity was captured. If they did, skip the write (returns 0); the
+            // saveUserEditedOcrText call already cleared embeddingByteArray so the pipeline
+            // will regenerate the embedding from the correct text on the next run.
+            val written = screenshotDao.saveEmbeddingIfNotUserEdited(
+                id = entity.id,
+                embedding = floatToByteArray(embedding)
+            )
+            if (written == 0) {
+                // User edited OCR text while embedding ran — skip the stale vector.
+                // Do NOT call onProgress() here: the row is not done, and counting it
+                // would inflate the progress counter toward a false 100 % completion.
+                Log.d(TAG, "Skipped embedding write — user edited OCR text for ${entity.fileName}")
+                continue
+            }
 
             ftsRebuildCounter++
             if (ftsRebuildCounter >= FTS_REBUILD_BATCH) {
@@ -369,6 +376,9 @@ class IndexingPipelineWorker @AssistedInject constructor(
     companion object {
         private const val TAG = "IndexingPipeline"
         const val PIPELINE_WORK_NAME = "indexing_pipeline_work"
+        /** WorkManager tag applied to every indexing worker request.
+         *  Used to observe and cancel all active indexing in a single call. */
+        const val INDEXING_TAG = "recall_indexing"
         const val FOREGROUND_THRESHOLD = 50
         const val NOTIFICATION_ID = 2001
         const val SCAN_CHANNEL_CAPACITY = 50

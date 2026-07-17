@@ -69,6 +69,8 @@ fun DetailScreen(
 ) {
     val screenshot by viewModel.screenshot.collectAsState()
     val isDeleting by viewModel.isDeleting.collectAsState()
+    val isOcrFailed by viewModel.isOcrFailed.collectAsState()
+    val isRetrying by viewModel.isRetrying.collectAsState()
     var chatQuery by remember { mutableStateOf("") }
     var isEditingText by remember { mutableStateOf(false) }
     var showDeleteDialog by remember { mutableStateOf(false) }
@@ -158,6 +160,8 @@ fun DetailScreen(
                     ExtractedTextSection(
                         ocrText = scr.ocrText,
                         isUserEdited = scr.isUserEdited,
+                        isOcrFailed = isOcrFailed,
+                        isRetrying = isRetrying,
                         isEditing = isEditingText,
                         onEditModeChange = { isEditingText = it },
                         onTextChanged = { editedText ->
@@ -165,6 +169,9 @@ fun DetailScreen(
                         },
                         onGenerateClick = {
                             viewModel.prioritizeOcr()
+                        },
+                        onRetryClick = {
+                            if (!isRetrying) viewModel.retryOcr()
                         }
                     )
                 }
@@ -403,10 +410,13 @@ private fun AISummaryCard(aiSummary: String?) {
 private fun ExtractedTextSection(
     ocrText: String?,
     isUserEdited: Boolean = false,
+    isOcrFailed: Boolean = false,
+    isRetrying: Boolean = false,
     isEditing: Boolean,
     onEditModeChange: (Boolean) -> Unit,
     onTextChanged: (String) -> Unit = {},
-    onGenerateClick: () -> Unit = {}
+    onGenerateClick: () -> Unit = {},
+    onRetryClick: () -> Unit = {}
 ) {
     val clipboardManager = LocalClipboardManager.current
 
@@ -430,7 +440,9 @@ private fun ExtractedTextSection(
             .pointerInput(isEditing) {
                 if (isEditing) {
                     detectTapGestures(onTap = {
-                        onTextChanged(extractedText)
+                        // Only save if text actually changed — avoids needless DB write
+                        // and prevents isUserEdited being set on an unchanged field.
+                        if (extractedText != (ocrText ?: "")) onTextChanged(extractedText)
                         onEditModeChange(false)
                     })
                 }
@@ -492,9 +504,11 @@ private fun ExtractedTextSection(
                         IconButton(
                             onClick = {
                                 if (isEditing) {
-                                    onTextChanged(extractedText)
+                                    // Only save if text actually changed — same guard as
+                                    // the ambient-tap dismiss path above.
+                                    if (extractedText != (ocrText ?: "")) onTextChanged(extractedText)
                                     onEditModeChange(false)
-                                } else if (hasOcrText) {
+                                } else if (hasOcrText || isOcrFailed) {
                                     onEditModeChange(true)
                                 } else {
                                     onGenerateClick()
@@ -504,17 +518,17 @@ private fun ExtractedTextSection(
                         ) {
                             val icon = when {
                                 isEditing -> Icons.Default.Check
-                                hasOcrText -> Icons.Default.Edit
+                                hasOcrText || isOcrFailed -> Icons.Default.Edit
                                 else -> Icons.Default.AutoAwesome
                             }
-                            val tint = if (!hasOcrText && !isEditing) {
+                            val tint = if (!hasOcrText && !isOcrFailed && !isEditing) {
                                 Color(0xFF4CAF50) // Green for generation icon
                             } else {
                                 MaterialTheme.colorScheme.onSurfaceVariant
                             }
                             Icon(
                                 imageVector = icon,
-                                contentDescription = if (isEditing) "Save" else if (hasOcrText) "Edit" else "Generate",
+                                contentDescription = if (isEditing) "Save" else if (hasOcrText || isOcrFailed) "Edit" else "Generate",
                                 tint = tint,
                                 modifier = Modifier.size(20.dp)
                             )
@@ -528,20 +542,47 @@ private fun ExtractedTextSection(
                             color = MaterialTheme.colorScheme.outlineVariant
                         ) {}
 
-                        // Copy Icon
-                        IconButton(
-                            onClick = {
-                                clipboardManager.setText(AnnotatedString(extractedText))
-                            },
-                            enabled = hasOcrText,
-                            modifier = Modifier.size(36.dp)
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.ContentCopy,
-                                contentDescription = "Copy",
-                                tint = if (hasOcrText) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.38f),
-                                modifier = Modifier.size(20.dp)
-                            )
+                        // Refresh (when OCR failed) or Copy icon
+                        if (isOcrFailed) {
+                            Box(
+                                modifier = Modifier.size(36.dp),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                if (isRetrying) {
+                                    CircularProgressIndicator(
+                                        modifier = Modifier.size(20.dp),
+                                        strokeWidth = 2.dp,
+                                        color = MaterialTheme.colorScheme.error
+                                    )
+                                } else {
+                                    IconButton(
+                                        onClick = onRetryClick,
+                                        modifier = Modifier.size(36.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.Refresh,
+                                            contentDescription = "Retry OCR",
+                                            tint = MaterialTheme.colorScheme.error,
+                                            modifier = Modifier.size(20.dp)
+                                        )
+                                    }
+                                }
+                            }
+                        } else {
+                            IconButton(
+                                onClick = {
+                                    clipboardManager.setText(AnnotatedString(extractedText))
+                                },
+                                enabled = hasOcrText,
+                                modifier = Modifier.size(36.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.ContentCopy,
+                                    contentDescription = "Copy",
+                                    tint = if (hasOcrText) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.38f),
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
                         }
                     }
                 }
@@ -590,9 +631,15 @@ private fun ExtractedTextSection(
                         contentAlignment = Alignment.Center
                     ) {
                         Text(
-                            text = "No text extracted yet. Click the generation icon to start OCR.",
+                            text = if (isOcrFailed)
+                                "OCR failed after multiple attempts. Tap the refresh icon to try again, or edit the text manually."
+                            else
+                                "No text extracted yet. Click the generation icon to start OCR.",
                             style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                            color = if (isOcrFailed)
+                                MaterialTheme.colorScheme.error.copy(alpha = 0.8f)
+                            else
+                                MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
                             textAlign = androidx.compose.ui.text.style.TextAlign.Center
                         )
                     }

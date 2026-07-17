@@ -111,3 +111,4 @@ app/src/main/assets/models/*.bin
 GITHUB_ISSUES.md
 specs/
 .github/sddp-config.md
+.java-version

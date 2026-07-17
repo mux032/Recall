@@ -5,25 +5,31 @@ import androidx.room.Entity
 import androidx.room.Fts4
 import androidx.room.Index
 import androidx.room.PrimaryKey
-import com.recall.app.domain.model.ProcessingState
+import com.recall.app.domain.model.PipelineFailureCode
 import com.recall.app.domain.model.Screenshot
 
 /**
- * CRITICAL FIX: Added unique index on filePath to prevent duplicate entries for the same physical file.
- * This ensures that even if multiple workers try to insert the same file simultaneously,
- * Room will enforce uniqueness at the database level, preventing the duplicate images issue.
+ * Room entity for a screenshot in the indexing pipeline.
  *
- * USER EDIT TRACKING: Added isUserEdited and userEditedAt fields to track manual OCR text edits.
- * When isUserEdited is true, OCR processing will not override the user's edited text.
+ * Pipeline state is derived from the actual data columns rather than a separate flag:
+ *   - ocrText IS NULL  AND pipelineCode = 0  → OCR pending
+ *   - ocrText NOT NULL AND embeddingByteArray IS NULL AND pipelineCode = 0 → embedding pending
+ *   - ocrText NOT NULL AND embeddingByteArray NOT NULL → fully indexed
+ *   - pipelineCode != 0 → permanently failed (see [PipelineFailureCode])
  *
- * RETRY TRACKING: Added ocrRetryCount field to prevent infinite loops on persistent OCR failures.
- * When ocrRetryCount reaches MAX_RETRIES, the screenshot will no longer be processed automatically.
+ * USER EDIT TRACKING: isUserEdited prevents the pipeline from overwriting user-edited OCR text.
+ * Any user edit must be non-blank; the edit screen enforces this to prevent ocrText being set
+ * to null (which would make the row look OCR-pending again).
+ *
+ * RETRY TRACKING: ocrRetryCount and embeddingRetryCount are tracked separately so transient
+ * embedding failures do not burn through the OCR retry budget on rows that already have valid
+ * OCR text.
  */
 @Entity(
     tableName = "screenshots",
     indices = [
         Index(value = ["filePath"], unique = true),
-        Index(value = ["processingState", "isUserEdited"])
+        Index(value = ["ocrText", "embeddingByteArray", "pipelineCode", "isUserEdited"])
     ]
 )
 data class ScreenshotEntity(
@@ -37,8 +43,11 @@ data class ScreenshotEntity(
     val ocrText: String?,
     val category: String,
     val tagsJson: String,
-    /** Stored as a String in the DB via [com.recall.app.data.local.converter.ProcessingStateConverter]. */
-    val processingState: ProcessingState = ProcessingState.OcrPending,
+    /**
+     * Terminal failure code — see [PipelineFailureCode].
+     * 0 = no failure; pipeline state is derived from [ocrText] and [embeddingByteArray].
+     */
+    val pipelineCode: Int = PipelineFailureCode.NONE,
     @ColumnInfo(typeAffinity = ColumnInfo.BLOB)
     val embeddingByteArray: ByteArray? = null,
     val isUserEdited: Boolean = false,
@@ -51,7 +60,7 @@ data class ScreenshotEntity(
      * and permanently orphan rows that already have valid OCR text.
      */
     val embeddingRetryCount: Int = 0,
-    /** Package name of the app that created this screenshot (e.g. \"com.whatsapp\"). Populated from
+    /** Package name of the app that created this screenshot (e.g. "com.whatsapp"). Populated from
      *  MediaStore.Images.Media.OWNER_PACKAGE_NAME on API 29+; empty string on older devices. */
     val appName: String = ""
 )
@@ -63,7 +72,6 @@ data class FtsScreenshotEntity(
 )
 
 fun ScreenshotEntity.toDomainModel(): Screenshot {
-    // Basic parser for Phase 1
     val tagsList = if (tagsJson.isBlank()) emptyList() else tagsJson.split(",")
     return Screenshot(
         id = id,
@@ -79,7 +87,7 @@ fun ScreenshotEntity.toDomainModel(): Screenshot {
         isUserEdited = isUserEdited,
         userEditedAt = userEditedAt,
         ocrRetryCount = ocrRetryCount,
-        processingState = processingState.value, // Int: 0=OcrPending,1=OcrCompleted,2=OcrEmbCompleted,3=Failed
+        pipelineCode = pipelineCode,
         appName = appName
     )
 }

@@ -8,7 +8,7 @@ import androidx.room.Query
 import androidx.room.Update
 import androidx.room.Transaction
 import com.recall.app.data.local.entity.ScreenshotEntity
-import com.recall.app.domain.model.ProcessingState
+import com.recall.app.domain.model.PipelineFailureCode
 import kotlinx.coroutines.flow.Flow
 
 @Dao
@@ -25,17 +25,18 @@ interface ScreenshotDao {
     fun getRecentScreenshots(since: Long): Flow<List<ScreenshotEntity>>
 
     /**
-     * Pass 1 — Screenshots that still need OCR (state = 0 / OcrPending).
+     * Pass 1 — Screenshots that still need OCR.
      *
-     * Returns at most [limit] rows ordered newest-first so the user sees
-     * recent screenshots indexed first.
+     * State is derived from data: ocrText IS NULL means OCR has not been completed.
+     * Excludes rows that have permanently failed ([pipelineCode] != 0) and user-edited rows.
      *
-     * Filtering is done in SQL to avoid loading the full table into memory when
-     * there is a large backlog.
+     * Returns at most [limit] rows ordered newest-first so the user sees recent screenshots
+     * indexed first. Filtering is done in SQL to avoid loading the full table into memory.
      */
     @Query("""
         SELECT * FROM screenshots
-        WHERE processingState = ${ProcessingState.VAL_OCR_PENDING}
+        WHERE ocrText IS NULL
+          AND pipelineCode = ${PipelineFailureCode.NONE}
           AND isUserEdited = 0
           AND ocrRetryCount < :maxRetries
         ORDER BY dateCreated DESC
@@ -44,18 +45,21 @@ interface ScreenshotDao {
     suspend fun getOcrPendingScreenshots(limit: Int, maxRetries: Int): List<ScreenshotEntity>
 
     /**
-     * Pass 2 — Screenshots where OCR succeeded but embedding generation failed/was skipped
-     * (state = 1 / OcrCompleted).
+     * Pass 2 — Screenshots where OCR text is present but embedding has not yet been generated.
      *
-     * Returns at most [limit] rows that must be re-attempted with the embedding
-     * generator only — no re-OCR needed.
-     * Excludes user-edited rows for safety (their text is preserved, but embedding
-     * retries are still safe; kept consistent with Pass 1 for simplicity).
+     * Intentionally does NOT filter by isUserEdited — when a user edits OCR text,
+     * [saveUserEditedOcrText] clears [embeddingByteArray] so the embedding is regenerated
+     * from the corrected text. Excluding user-edited rows here would leave a stale embedding
+     * (derived from the old, wrong OCR text) in the database permanently.
+     *
+     * OCR is blocked on user-edited rows ([getOcrPendingScreenshots] keeps isUserEdited = 0);
+     * embedding regeneration is always safe and always needed when [embeddingByteArray] is null.
      */
     @Query("""
         SELECT * FROM screenshots
-        WHERE processingState = ${ProcessingState.VAL_OCR_COMPLETED}
-          AND isUserEdited = 0
+        WHERE ocrText IS NOT NULL
+          AND embeddingByteArray IS NULL
+          AND pipelineCode = ${PipelineFailureCode.NONE}
           AND embeddingRetryCount < :maxEmbeddingRetries
         ORDER BY dateCreated DESC
         LIMIT :limit
@@ -63,36 +67,26 @@ interface ScreenshotDao {
     suspend fun getEmbeddingPendingScreenshots(limit: Int, maxEmbeddingRetries: Int): List<ScreenshotEntity>
 
     /**
-     * Returns the number of screenshots the pipeline will process on its next run.
+     * Returns the total number of screenshots the pipeline will process on its next run.
      *
-     * Counts ONLY OcrPending rows (state = 0) — OcrCompleted means "waiting for
-     * embedding model" and must NOT be counted as pending work for the self-chain loop.
-     * Including OcrCompleted rows here would cause the pipeline to self-chain indefinitely
-     * when the ONNX model is absent.
-     *
-     * Excludes permanently exhausted failures and user-edited rows.
+     * Counts both OCR-pending (ocrText IS NULL) and embedding-pending
+     * (ocrText IS NOT NULL AND embeddingByteArray IS NULL) rows, excluding permanently
+     * failed rows. User-edited rows are excluded from OCR-pending but included in
+     * embedding-pending — their corrected text still needs an up-to-date embedding.
      */
     @Query("""
         SELECT COUNT(*) FROM screenshots
-        WHERE processingState = ${ProcessingState.VAL_OCR_PENDING}
-          AND isUserEdited = 0
-          AND ocrRetryCount < :maxOcrRetries
+        WHERE pipelineCode = ${PipelineFailureCode.NONE}
+          AND (
+            (ocrText IS NULL AND isUserEdited = 0 AND ocrRetryCount < :maxOcrRetries)
+            OR (ocrText IS NOT NULL AND embeddingByteArray IS NULL AND embeddingRetryCount < :maxEmbeddingRetries)
+          )
     """)
-    suspend fun getPendingCount(maxOcrRetries: Int): Int
-
-    /**
-     * Returns count of screenshots with OCR done but no embedding — used to trigger
-     * the pipeline when the model becomes available.
-     */
-    @Query("SELECT COUNT(*) FROM screenshots WHERE processingState = ${ProcessingState.VAL_OCR_COMPLETED}")
-    suspend fun getOcrCompletedCount(): Int
+    suspend fun getPendingCount(maxOcrRetries: Int, maxEmbeddingRetries: Int): Int
 
     /**
      * Returns a single page of screenshots ordered newest first.
      * Used by the windowed lazy-loading flow to avoid loading the entire library into RAM.
-     *
-     * @param limit  Number of rows to return (page size).
-     * @param offset Number of rows to skip (page index × page size).
      */
     @Query("SELECT * FROM screenshots ORDER BY dateCreated DESC LIMIT :limit OFFSET :offset")
     suspend fun getScreenshotPage(limit: Int, offset: Int): List<ScreenshotEntity>
@@ -103,7 +97,7 @@ interface ScreenshotDao {
 
     /**
      * Reactive count — Room re-emits whenever the screenshots table changes.
-     * Used by [HomeViewModel] to detect new rows and trigger a list refresh.
+     * Used by HomeViewModel to detect new rows and trigger a list refresh.
      */
     @Query("SELECT COUNT(*) FROM screenshots")
     fun getScreenshotCountFlow(): Flow<Int>
@@ -125,34 +119,29 @@ interface ScreenshotDao {
     suspend fun getScreenshotsByIds(ids: List<String>): List<ScreenshotEntity>
 
     /**
-     * Atomic update: Only updates if processingState matches [expectedState].
-     * Returns number of rows updated (0 if no match, 1 if updated).
-     * Prevents TOCTOU race conditions.
-     *
-     * USER EDIT PROTECTION: Will not override OCR text if isUserEdited is true.
+     * Atomic conditional update: only updates a row if it is still OCR-pending
+     * (ocrText IS NULL) and not user-edited, preventing TOCTOU race conditions.
+     * Returns the number of rows updated (0 = skipped, 1 = updated).
      */
     @Query("""
         UPDATE screenshots
         SET ocrText = :ocrText,
             embeddingByteArray = :embedding,
-            processingState = ${ProcessingState.VAL_OCR_EMB_COMPLETED},
             dateIndexed = :timestamp
         WHERE filePath = :filePath
-          AND processingState = :expectedState
+          AND ocrText IS NULL
           AND (isUserEdited = 0 OR isUserEdited IS NULL)
     """)
-    suspend fun updateIfProcessingState(
+    suspend fun updateIfOcrPending(
         filePath: String,
         ocrText: String?,
         embedding: ByteArray?,
-        timestamp: Long,
-        expectedState: Int = ProcessingState.VAL_OCR_PENDING
+        timestamp: Long
     ): Int
 
     /**
      * Full-text search using FTS4 with wildcard matching.
      * Automatically appends wildcard (*) to enable prefix matching.
-     * Example: "insta" matches "instagram", "installation", etc.
      */
     @Query("""
         SELECT screenshots.*
@@ -212,9 +201,44 @@ interface ScreenshotDao {
     suspend fun resetOcrRetryCount(id: String): Int
 
     /**
-     * Upsert: Insert new screenshot or update if exists (by filePath).
-     * Uses an atomic UPDATE with a state guard to prevent TOCTOU race conditions.
-     * Only updates if current processingState is OcrPending (0) and isUserEdited is false.
+     * Saves the generated embedding for a screenshot — but only if the user has NOT manually
+     * edited the OCR text ([isUserEdited] = 0).
+     *
+     * If the user edited the text while the embedding was being generated, this write is skipped
+     * (returns 0 rows updated). [saveUserEditedOcrText] already cleared [embeddingByteArray]
+     * so the pipeline will regenerate the embedding from the correct text on the next run.
+     *
+     * Does NOT overwrite [ocrText] or [isUserEdited] — those columns are owned by the OCR
+     * stage and the user respectively.
+     *
+     * @return number of rows updated (0 = skipped because user edited; 1 = success)
+     */
+    @Query("""
+        UPDATE screenshots
+        SET embeddingByteArray = :embedding,
+            ocrRetryCount = 0,
+            embeddingRetryCount = 0
+        WHERE id = :id
+          AND isUserEdited = 0
+    """)
+    suspend fun saveEmbeddingIfNotUserEdited(id: String, embedding: ByteArray): Int
+
+    /**
+     * Marks a row as permanently failed with the given [failureCode] (see [PipelineFailureCode]).
+     * Write-once: once set, the pipeline will not retry the row.
+     */
+    @Query("""
+        UPDATE screenshots
+        SET pipelineCode = :failureCode
+        WHERE id = :id
+          AND pipelineCode = 0
+    """)
+    suspend fun markFailed(id: String, failureCode: Int): Int
+
+    /**
+     * Upsert: insert a new screenshot or update an existing one (matched by filePath).
+     * Only updates if the existing row is still OCR-pending (ocrText IS NULL) and not
+     * user-edited, preventing TOCTOU races.
      */
     @Transaction
     suspend fun insertOrUpdateWithOcr(
@@ -230,28 +254,21 @@ interface ScreenshotDao {
                 Log.d(TAG, "Skipping OCR update - user has edited this screenshot: ${existing.id}")
                 existing.id
             } else {
-                val rowsUpdated = updateIfProcessingState(
+                val rowsUpdated = updateIfOcrPending(
                     filePath = filePath,
                     ocrText = ocrText,
                     embedding = embedding,
-                    timestamp = timestamp,
-                    expectedState = ProcessingState.VAL_OCR_PENDING
+                    timestamp = timestamp
                 )
-
                 if (rowsUpdated > 0) {
                     Log.d(TAG, "OCR update succeeded: ${existing.id}")
                     rebuildFtsIndex()
                 } else {
-                    Log.d(TAG, "OCR update skipped - state mismatch: ${existing.id}")
+                    Log.d(TAG, "OCR update skipped - row already processed: ${existing.id}")
                 }
                 existing.id
             }
         } else {
-            val initialState = when {
-                ocrText != null && embedding != null -> ProcessingState.OcrEmbCompleted
-                ocrText != null                      -> ProcessingState.OcrCompleted
-                else                                 -> ProcessingState.OcrPending
-            }
             val entity = ScreenshotEntity(
                 id = java.util.UUID.randomUUID().toString(),
                 filePath = filePath,
@@ -263,8 +280,8 @@ interface ScreenshotDao {
                 ocrText = ocrText,
                 category = "Uncategorized",
                 tagsJson = "",
-                processingState = initialState,
                 embeddingByteArray = embedding
+                // pipelineCode defaults to NONE (0)
             )
             insert(entity)
             entity.id
@@ -273,15 +290,21 @@ interface ScreenshotDao {
 
     /**
      * Save user-edited OCR text.
-     * Sets isUserEdited flag to prevent automatic OCR from overriding user edits.
-     * Marks the row as fully indexed (OcrEmbCompleted = 2) so it appears in search results.
+     *
+     * Sets isUserEdited = 1 to prevent automatic OCR from overriding the user's text.
+     * Clears embeddingByteArray so the pipeline regenerates the embedding from the
+     * corrected text — without this, semantic search would match the screenshot using
+     * a vector derived from the old, potentially wrong OCR text.
+     *
+     * [editedOcrText] must not be null or blank — enforced at the UI layer.
      */
     @Query("""
         UPDATE screenshots
         SET ocrText = :editedOcrText,
             isUserEdited = 1,
             userEditedAt = :timestamp,
-            processingState = ${ProcessingState.VAL_OCR_EMB_COMPLETED}
+            embeddingByteArray = NULL,
+            pipelineCode = ${PipelineFailureCode.NONE}
         WHERE id = :id
     """)
     suspend fun saveUserEditedOcrText(
@@ -289,6 +312,27 @@ interface ScreenshotDao {
         editedOcrText: String,
         timestamp: Long = System.currentTimeMillis()
     )
+
+    /**
+     * Resets a permanently-failed screenshot back to OCR-pending state for a fresh retry.
+     *
+     * Clears [ocrText], [embeddingByteArray], [pipelineCode], and [ocrRetryCount] so the
+     * row re-enters the pipeline from scratch on the next worker run.
+     * Also clears [isUserEdited] — a refresh is a fresh machine OCR attempt, not a user edit.
+     *
+     * Only meaningful when [pipelineCode] = [PipelineFailureCode.OCR_FAILED]; calling it on
+     * a healthy row is a no-op in practice but harmless.
+     */
+    @Query("""
+        UPDATE screenshots
+        SET ocrText = NULL,
+            embeddingByteArray = NULL,
+            pipelineCode = ${PipelineFailureCode.NONE},
+            ocrRetryCount = 0,
+            isUserEdited = 0
+        WHERE id = :id
+    """)
+    suspend fun resetForOcrRetry(id: String)
 
     companion object {
         private const val TAG = "ScreenshotDao"

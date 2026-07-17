@@ -140,7 +140,7 @@ class ModelDownloadWorker @AssistedInject constructor(
                     IndexingPipelineWorker.PIPELINE_WORK_NAME,
                     ExistingWorkPolicy.KEEP,
                     OneTimeWorkRequestBuilder<IndexingPipelineWorker>()
-                        .addTag(RecallApplication.INDEXING_TAG)
+                        .addTag(IndexingPipelineWorker.INDEXING_TAG)
                         .build()
                 )
                 Log.i(TAG, "Enqueued IndexingPipelineWorker to process OCR_COMPLETED screenshots")

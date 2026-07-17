@@ -87,7 +87,7 @@ class MainActivity : ComponentActivity() {
 
     internal fun startInitialDeepScan(forceReplace: Boolean = false) {
         val request = OneTimeWorkRequestBuilder<IndexingPipelineWorker>()
-            .addTag(RecallApplication.INDEXING_TAG)
+            .addTag(IndexingPipelineWorker.INDEXING_TAG)
             .build()
         val policy = if (forceReplace) {
             // After explicit permission grant: always run, even if a stale worker exists

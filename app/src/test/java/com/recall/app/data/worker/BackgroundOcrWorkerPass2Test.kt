@@ -2,11 +2,13 @@ package com.recall.app.data.worker
 
 import com.recall.app.data.local.dao.ScreenshotDao
 import com.recall.app.data.local.entity.ScreenshotEntity
-import com.recall.app.domain.model.ProcessingState
+import com.recall.app.domain.model.PipelineFailureCode
 import com.recall.app.domain.usecase.EmbeddingGenerator
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Before
 import org.junit.Test
 import org.mockito.kotlin.any
@@ -25,7 +27,7 @@ import org.mockito.kotlin.whenever
  * code, extracted so it can be unit-tested without Robolectric.
  *
  * What is verified:
- * 1. Success path: processingState → Done, embeddingRetryCount reset to 0, FTS rebuilt.
+ * 1. Success path: embeddingByteArray populated, embeddingRetryCount reset to 0, FTS rebuilt.
  * 2. Null-embedding path: embeddingRetryCount incremented, ocrRetryCount untouched.
  * 3. Exception path: embeddingRetryCount incremented, ocrRetryCount untouched.
  * 4. Rows with exhausted ocrRetryCount are still processed (counter separation regression guard).
@@ -48,7 +50,7 @@ class BackgroundOcrWorkerPass2Test {
         ocrText = "Hello World — valid OCR text",
         category = "Uncategorized",
         tagsJson = "",
-        processingState = ProcessingState.OcrPending,
+        // pipelineCode defaults to NONE (0) — OCR done, embedding pending (derived from data)
         embeddingByteArray = null,
         ocrRetryCount = 0,
         embeddingRetryCount = 0
@@ -64,14 +66,14 @@ class BackgroundOcrWorkerPass2Test {
     // ── Success path ─────────────────────────────────────────────────────────
 
     @Test
-    fun `success - saves Done state and resets embeddingRetryCount to 0`() = runTest {
+    fun `success - saves embedding and resets embeddingRetryCount to 0`() = runTest {
         whenever(embeddingGenerator.generate(any())).thenReturn(FloatArray(128) { it.toFloat() })
 
         logic.retryEmbedding(ocrDoneEntity)
 
         val captor = argumentCaptor<ScreenshotEntity>()
         verify(screenshotDao).update(captor.capture())
-        assertEquals(ProcessingState.OcrEmbCompleted, captor.firstValue.processingState)
+        assertNotNull(captor.firstValue.embeddingByteArray)
         assertEquals(0, captor.firstValue.embeddingRetryCount)
     }
 
@@ -84,6 +86,17 @@ class BackgroundOcrWorkerPass2Test {
         val captor = argumentCaptor<ScreenshotEntity>()
         verify(screenshotDao).update(captor.capture())
         assertEquals(ocrDoneEntity.ocrText, captor.firstValue.ocrText)
+    }
+
+    @Test
+    fun `success - pipelineCode remains NONE after successful embedding`() = runTest {
+        whenever(embeddingGenerator.generate(any())).thenReturn(FloatArray(128))
+
+        logic.retryEmbedding(ocrDoneEntity)
+
+        val captor = argumentCaptor<ScreenshotEntity>()
+        verify(screenshotDao).update(captor.capture())
+        assertEquals(PipelineFailureCode.NONE, captor.firstValue.pipelineCode)
     }
 
     @Test
@@ -126,7 +139,7 @@ class BackgroundOcrWorkerPass2Test {
     }
 
     @Test
-    fun `null embedding - does NOT update the row (stays Pending for next run)`() = runTest {
+    fun `null embedding - does NOT update the row (stays embedding-pending for next run)`() = runTest {
         whenever(embeddingGenerator.generate(any())).thenReturn(null)
 
         logic.retryEmbedding(ocrDoneEntity)
@@ -168,7 +181,7 @@ class BackgroundOcrWorkerPass2Test {
 
         val captor = argumentCaptor<ScreenshotEntity>()
         verify(screenshotDao).update(captor.capture())
-        assertEquals(ProcessingState.OcrEmbCompleted, captor.firstValue.processingState)
+        assertNotNull(captor.firstValue.embeddingByteArray)
     }
 }
 
@@ -177,9 +190,7 @@ class BackgroundOcrWorkerPass2Test {
  * that can be unit-tested on the JVM without WorkerParameters or a Hilt context.
  *
  * The implementation is intentionally a verbatim copy of [BackgroundOcrWorker.retryEmbedding]
- * so the test exercises exactly the same code paths. If the worker implementation ever
- * diverges, the constants test ([BackgroundOcrWorkerConstantsTest]) and this test together
- * form a regression safety net.
+ * so the test exercises exactly the same code paths.
  */
 internal class EmbeddingRetryLogic(
     private val screenshotDao: ScreenshotDao,
@@ -194,7 +205,6 @@ internal class EmbeddingRetryLogic(
             if (embedding != null) {
                 screenshotDao.update(screenshot.copy(
                     embeddingByteArray = floatToByteArray(embedding),
-                    processingState = ProcessingState.OcrEmbCompleted,
                     embeddingRetryCount = 0
                 ))
                 screenshotDao.rebuildFtsIndex()

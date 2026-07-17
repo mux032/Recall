@@ -10,7 +10,7 @@ import androidx.room.withTransaction
 import com.recall.app.data.local.dao.ScreenshotDao
 import com.recall.app.data.local.entity.ScreenshotEntity
 import com.recall.app.data.local.entity.toDomainModel
-import com.recall.app.domain.model.ProcessingState
+import com.recall.app.domain.model.PipelineFailureCode
 import com.recall.app.domain.model.Screenshot
 import com.recall.app.domain.repository.ScreenshotRepository
 import com.recall.app.domain.usecase.EmbeddingGenerator
@@ -79,7 +79,6 @@ class ScreenshotRepositoryImpl @Inject constructor(
             ocrText = screenshot.ocrText,
             category = screenshot.category,
             tagsJson = screenshot.tags.joinToString(","),
-            processingState = ProcessingState.OcrEmbCompleted,
             embeddingByteArray = floatArrayToByteArray(screenshot.embedding),
             isUserEdited = screenshot.isUserEdited,
             userEditedAt = screenshot.userEditedAt
@@ -112,13 +111,6 @@ class ScreenshotRepositoryImpl @Inject constructor(
             screenshot.ocrText
         }
 
-        // Preserve the existing processingState so callers that update non-pipeline fields
-        // (e.g. category, tags) do not accidentally promote a row out of the OCR pipeline.
-        // Only fall back to OcrEmbCompleted if there is no existing DB record (shouldn't happen
-        // for updates, but be safe) and no state is derivable from the domain model.
-        val preservedState = existingEntity?.processingState
-            ?: ProcessingState.fromValue(screenshot.processingState)
-
         val entity = ScreenshotEntity(
             id = screenshot.id,
             filePath = screenshot.filePath,
@@ -130,11 +122,15 @@ class ScreenshotRepositoryImpl @Inject constructor(
             ocrText = finalOcrText,  // Use preserved text
             category = screenshot.category,
             tagsJson = screenshot.tags.joinToString(","),
-            processingState = preservedState,
+            // Preserve pipeline counters and failure code so callers that update non-pipeline
+            // fields (e.g. category, tags) do not accidentally reset retry state or clear a
+            // permanently-failed row back to NONE.
+            pipelineCode = existingEntity?.pipelineCode ?: PipelineFailureCode.NONE,
             embeddingByteArray = floatArrayToByteArray(screenshot.embedding),
             isUserEdited = if (shouldPreserveUserEditedFlag) true else screenshot.isUserEdited,
             userEditedAt = if (shouldPreserveUserEditedFlag) existingEntity?.userEditedAt else screenshot.userEditedAt,
-            ocrRetryCount = screenshot.ocrRetryCount
+            ocrRetryCount = screenshot.ocrRetryCount,
+            embeddingRetryCount = existingEntity?.embeddingRetryCount ?: 0
         )
         // Use REPLACE strategy to properly update existing records
         screenshotDao.insertOrReplace(entity)
@@ -146,6 +142,10 @@ class ScreenshotRepositoryImpl @Inject constructor(
             editedOcrText = editedText,
             timestamp = System.currentTimeMillis()
         )
+    }
+
+    override suspend fun resetForOcrRetry(id: String) {
+        screenshotDao.resetForOcrRetry(id)
     }
 
     override suspend fun deleteScreenshot(id: String) {
@@ -193,7 +193,6 @@ class ScreenshotRepositoryImpl @Inject constructor(
             val updatedEntity = entity.copy(
                 ocrText = extractedText,
                 embeddingByteArray = embedding?.let { floatArrayToByteArray(it) },
-                processingState = ProcessingState.OcrEmbCompleted,
                 dateIndexed = System.currentTimeMillis(),
                 ocrRetryCount = 0  // Reset retry count on success
             )
@@ -369,8 +368,8 @@ class ScreenshotRepositoryImpl @Inject constructor(
                                 ocrText = null,
                                 category = "Uncategorized",
                                 tagsJson = "",
-                                processingState = ProcessingState.OcrPending,
                                 appName = appName
+                                // pipelineCode defaults to PipelineFailureCode.NONE (0)
                             )
 
                             screenshotDao.insert(entity)

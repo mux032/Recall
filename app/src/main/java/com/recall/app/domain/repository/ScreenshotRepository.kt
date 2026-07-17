@@ -46,8 +46,15 @@ interface ScreenshotRepository {
     suspend fun saveUserEditedOcrText(id: String, editedText: String)
 
     /**
+     * Resets a permanently-failed screenshot back to OCR-pending state.
+     * Clears ocrText, embeddingByteArray, pipelineCode and ocrRetryCount so the
+     * pipeline retries it from scratch on the next worker run.
+     */
+    suspend fun resetForOcrRetry(id: String)
+
+    /**
      * Scans MediaStore for images in screenshot directories and inserts any
-     * newly discovered files into the database as [ProcessingState.OcrPending] rows.
+     * newly discovered files into the database with ocrText = null (OCR-pending state).
      *
      * @return the number of new screenshots added to the database.
      */

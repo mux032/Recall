@@ -29,10 +29,6 @@ class RecallApplication : Application(), Configuration.Provider {
     companion object {
         private const val TAG = "RecallApplication"
 
-        /** Shared WorkManager tag applied to every indexing worker.
-         *  Used by [HomeViewModel] to observe and cancel all active indexing in one call. */
-        const val INDEXING_TAG = "recall_indexing"
-
         /** Notification channel ID for foreground indexing service notifications. */
         const val INDEXING_CHANNEL_ID = "indexing_channel"
     }
@@ -156,7 +152,7 @@ class RecallApplication : Application(), Configuration.Provider {
         }
 
         val pipelineRequest = OneTimeWorkRequestBuilder<IndexingPipelineWorker>()
-            .addTag(INDEXING_TAG)
+            .addTag(IndexingPipelineWorker.INDEXING_TAG)
             .build()
         WorkManager.getInstance(this).enqueueUniqueWork(
             IndexingPipelineWorker.PIPELINE_WORK_NAME,
