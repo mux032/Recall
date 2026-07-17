@@ -1,9 +1,13 @@
 package com.recall.app.presentation.ui.detail
 
+import android.os.Build
 import androidx.lifecycle.SavedStateHandle
+import androidx.work.ExistingWorkPolicy
+import androidx.work.OneTimeWorkRequest
+import androidx.work.WorkManager
+import com.recall.app.data.worker.IndexingPipelineWorker
 import com.recall.app.domain.model.Screenshot
 import com.recall.app.domain.repository.ScreenshotRepository
-import android.os.Build
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.launch
@@ -29,10 +33,12 @@ class DetailViewModelTest {
     private lateinit var screenshotRepository: ScreenshotRepository
     private lateinit var savedStateHandle: SavedStateHandle
     private lateinit var testDispatcher: TestDispatcher
+    private lateinit var workManager: WorkManager
 
     @Before
     fun setup() {
         screenshotRepository = mock()
+        workManager = mock()
         savedStateHandle = SavedStateHandle(mapOf("screenshotId" to "test_screenshot_123"))
         testDispatcher = StandardTestDispatcher()
         Dispatchers.setMain(testDispatcher)
@@ -49,7 +55,7 @@ class DetailViewModelTest {
         val expectedId = "test_screenshot_123"
 
         // When
-        viewModel = DetailViewModel(screenshotRepository, savedStateHandle)
+        viewModel = DetailViewModel(screenshotRepository, workManager, savedStateHandle)
 
         // Then
         assertEquals(expectedId, savedStateHandle.get<String>("screenshotId"))
@@ -65,7 +71,7 @@ class DetailViewModelTest {
             .thenReturn(testScreenshot)
 
         // When
-        viewModel = DetailViewModel(screenshotRepository, savedStateHandle)
+        viewModel = DetailViewModel(screenshotRepository, workManager, savedStateHandle)
         testDispatcher.scheduler.advanceUntilIdle()
 
         // Then
@@ -83,7 +89,7 @@ class DetailViewModelTest {
             .thenReturn(testScreenshot)
 
         // When
-        viewModel = DetailViewModel(screenshotRepository, savedStateHandle)
+        viewModel = DetailViewModel(screenshotRepository, workManager, savedStateHandle)
         testDispatcher.scheduler.advanceUntilIdle()
 
         // Then
@@ -100,7 +106,7 @@ class DetailViewModelTest {
             .thenReturn(null)
 
         // When
-        viewModel = DetailViewModel(screenshotRepository, savedStateHandle)
+        viewModel = DetailViewModel(screenshotRepository, workManager, savedStateHandle)
         testDispatcher.scheduler.advanceUntilIdle()
 
         // Then
@@ -118,7 +124,7 @@ class DetailViewModelTest {
             .thenReturn(testScreenshot)
 
         // When
-        viewModel = DetailViewModel(screenshotRepository, savedStateHandle)
+        viewModel = DetailViewModel(screenshotRepository, workManager, savedStateHandle)
         testDispatcher.scheduler.advanceUntilIdle()
 
         // Then
@@ -144,7 +150,7 @@ class DetailViewModelTest {
             .thenReturn(testScreenshot)
 
         // When
-        viewModel = DetailViewModel(screenshotRepository, savedStateHandle)
+        viewModel = DetailViewModel(screenshotRepository, workManager, savedStateHandle)
         testDispatcher.scheduler.advanceUntilIdle()
 
         // Then
@@ -163,7 +169,7 @@ class DetailViewModelTest {
             .thenReturn(testScreenshot)
 
         // When
-        viewModel = DetailViewModel(screenshotRepository, savedStateHandle)
+        viewModel = DetailViewModel(screenshotRepository, workManager, savedStateHandle)
         testDispatcher.scheduler.advanceUntilIdle()
 
         // Then
@@ -180,7 +186,7 @@ class DetailViewModelTest {
             .thenReturn(testScreenshot)
 
         // When
-        viewModel = DetailViewModel(screenshotRepository, savedStateHandle)
+        viewModel = DetailViewModel(screenshotRepository, workManager, savedStateHandle)
         testDispatcher.scheduler.advanceUntilIdle()
 
         // Then
@@ -208,7 +214,7 @@ class DetailViewModelTest {
             .thenReturn(testScreenshot)
 
         // When
-        viewModel = DetailViewModel(screenshotRepository, savedStateHandle)
+        viewModel = DetailViewModel(screenshotRepository, workManager, savedStateHandle)
         testDispatcher.scheduler.advanceUntilIdle()
 
         // Then
@@ -246,7 +252,7 @@ class DetailViewModelTest {
         whenever(screenshotRepository.getScreenshotById(testScreenshotId))
             .thenReturn(createTestScreenshot(testScreenshotId))
 
-        viewModel = DetailViewModel(screenshotRepository, savedStateHandle)
+        viewModel = DetailViewModel(screenshotRepository, workManager, savedStateHandle)
         testDispatcher.scheduler.advanceUntilIdle()
 
         viewModel.deleteScreenshot()
@@ -261,7 +267,7 @@ class DetailViewModelTest {
         whenever(screenshotRepository.getScreenshotById(testScreenshotId))
             .thenReturn(createTestScreenshot(testScreenshotId))
 
-        viewModel = DetailViewModel(screenshotRepository, savedStateHandle)
+        viewModel = DetailViewModel(screenshotRepository, workManager, savedStateHandle)
         testDispatcher.scheduler.advanceUntilIdle()
 
         val events = mutableListOf<DetailNavigationEvent>()
@@ -282,7 +288,7 @@ class DetailViewModelTest {
         whenever(screenshotRepository.getScreenshotById(testScreenshotId))
             .thenReturn(createTestScreenshot(testScreenshotId))
 
-        viewModel = DetailViewModel(screenshotRepository, savedStateHandle)
+        viewModel = DetailViewModel(screenshotRepository, workManager, savedStateHandle)
         testDispatcher.scheduler.advanceUntilIdle()
 
         viewModel.deleteScreenshot()
@@ -297,7 +303,7 @@ class DetailViewModelTest {
         whenever(screenshotRepository.getScreenshotById(testScreenshotId))
             .thenReturn(createTestScreenshot(testScreenshotId))
 
-        viewModel = DetailViewModel(screenshotRepository, savedStateHandle)
+        viewModel = DetailViewModel(screenshotRepository, workManager, savedStateHandle)
         testDispatcher.scheduler.advanceUntilIdle()
 
         // Both calls happen synchronously — second sees _isDeleting=true immediately
@@ -317,7 +323,7 @@ class DetailViewModelTest {
         whenever(screenshotRepository.deleteScreenshot(testScreenshotId))
             .thenThrow(RuntimeException("DB error"))
 
-        viewModel = DetailViewModel(screenshotRepository, savedStateHandle)
+        viewModel = DetailViewModel(screenshotRepository, workManager, savedStateHandle)
         testDispatcher.scheduler.advanceUntilIdle()
 
         // ViewModel catches the exception internally — should not propagate
@@ -326,6 +332,119 @@ class DetailViewModelTest {
 
         // isDeleting must be false regardless of the exception (finally block)
         assertFalse(viewModel.isDeleting.value)
+    }
+
+    // -----------------------------------------------------------------------
+    // retryOcr() / isRetrying
+    // -----------------------------------------------------------------------
+
+    @Test
+    fun `isRetrying starts as false`() = runTest {
+        whenever(screenshotRepository.getScreenshotById(any())).thenReturn(null)
+
+        viewModel = DetailViewModel(screenshotRepository, workManager, savedStateHandle)
+        testDispatcher.scheduler.advanceUntilIdle()
+
+        assertFalse(viewModel.isRetrying.value)
+    }
+
+    @Test
+    fun `retryOcr calls resetForOcrRetry on repository`() = runTest {
+        val testScreenshotId = "test_screenshot_123"
+        whenever(screenshotRepository.getScreenshotById(testScreenshotId))
+            .thenReturn(createTestScreenshot(testScreenshotId))
+
+        viewModel = DetailViewModel(screenshotRepository, workManager, savedStateHandle)
+        testDispatcher.scheduler.advanceUntilIdle()
+
+        viewModel.retryOcr()
+        testDispatcher.scheduler.advanceUntilIdle()
+
+        verify(screenshotRepository).resetForOcrRetry(testScreenshotId)
+    }
+
+    @Test
+    fun `retryOcr resets isRetrying to false after completion`() = runTest {
+        val testScreenshotId = "test_screenshot_123"
+        whenever(screenshotRepository.getScreenshotById(testScreenshotId))
+            .thenReturn(createTestScreenshot(testScreenshotId))
+
+        viewModel = DetailViewModel(screenshotRepository, workManager, savedStateHandle)
+        testDispatcher.scheduler.advanceUntilIdle()
+
+        viewModel.retryOcr()
+        testDispatcher.scheduler.advanceUntilIdle()
+
+        assertFalse(viewModel.isRetrying.value)
+    }
+
+    @Test
+    fun `retryOcr resets isRetrying even when repository throws`() = runTest {
+        val testScreenshotId = "test_screenshot_123"
+        whenever(screenshotRepository.getScreenshotById(testScreenshotId))
+            .thenReturn(createTestScreenshot(testScreenshotId))
+        whenever(screenshotRepository.resetForOcrRetry(testScreenshotId))
+            .thenThrow(RuntimeException("DB error"))
+
+        viewModel = DetailViewModel(screenshotRepository, workManager, savedStateHandle)
+        testDispatcher.scheduler.advanceUntilIdle()
+
+        viewModel.retryOcr()
+        testDispatcher.scheduler.advanceUntilIdle()
+
+        assertFalse(viewModel.isRetrying.value)
+    }
+
+    @Test
+    fun `retryOcr enqueues IndexingPipelineWorker with correct work name`() = runTest {
+        val testScreenshotId = "test_screenshot_123"
+        whenever(screenshotRepository.getScreenshotById(testScreenshotId))
+            .thenReturn(createTestScreenshot(testScreenshotId))
+
+        viewModel = DetailViewModel(screenshotRepository, workManager, savedStateHandle)
+        testDispatcher.scheduler.advanceUntilIdle()
+
+        viewModel.retryOcr()
+        testDispatcher.scheduler.advanceUntilIdle()
+
+        verify(workManager).enqueueUniqueWork(
+            eq(IndexingPipelineWorker.PIPELINE_WORK_NAME),
+            eq(ExistingWorkPolicy.KEEP),
+            any<OneTimeWorkRequest>()
+        )
+    }
+
+    @Test
+    fun `retryOcr sets isRetrying to true before calling repository`() = runTest {
+        val testScreenshotId = "test_screenshot_123"
+        // Capture isRetrying.value at the moment resetForOcrRetry is invoked.
+        // The thenAnswer callback runs synchronously inside the coroutine, which is
+        // after `_isRetrying.value = true` has been set — giving us a reliable
+        // in-flight observation without needing the mock to actually suspend.
+        var isRetryingDuringRepoCall = false
+
+        whenever(screenshotRepository.getScreenshotById(testScreenshotId))
+            .thenReturn(createTestScreenshot(testScreenshotId))
+        whenever(screenshotRepository.resetForOcrRetry(testScreenshotId))
+            .thenAnswer {
+                isRetryingDuringRepoCall = viewModel.isRetrying.value
+                null
+            }
+
+        viewModel = DetailViewModel(screenshotRepository, workManager, savedStateHandle)
+        testDispatcher.scheduler.advanceUntilIdle()
+
+        viewModel.retryOcr()
+        testDispatcher.scheduler.advanceUntilIdle()
+
+        assertTrue(
+            "isRetrying must be true at the point resetForOcrRetry is called",
+            isRetryingDuringRepoCall
+        )
+        assertFalse(
+            "isRetrying must be false after retryOcr completes",
+            viewModel.isRetrying.value
+        )
     }
 
     // Reference to ViewModel - created in each test

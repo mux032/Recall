@@ -10,7 +10,7 @@ import androidx.room.withTransaction
 import com.recall.app.data.local.dao.ScreenshotDao
 import com.recall.app.data.local.entity.ScreenshotEntity
 import com.recall.app.data.local.entity.toDomainModel
-import com.recall.app.domain.model.ProcessingState
+import com.recall.app.domain.model.PipelineFailureCode
 import com.recall.app.domain.model.Screenshot
 import com.recall.app.domain.repository.ScreenshotRepository
 import com.recall.app.domain.usecase.EmbeddingGenerator
@@ -29,6 +29,7 @@ class ScreenshotRepositoryImpl @Inject constructor(
     private val screenshotDao: ScreenshotDao,
     private val ocrProcessor: OcrProcessor,
     private val embeddingGenerator: EmbeddingGenerator,
+    private val permissionRepository: PermissionRepository,
     @ApplicationContext private val context: Context
 ) : ScreenshotRepository {
 
@@ -78,7 +79,6 @@ class ScreenshotRepositoryImpl @Inject constructor(
             ocrText = screenshot.ocrText,
             category = screenshot.category,
             tagsJson = screenshot.tags.joinToString(","),
-            processingState = ProcessingState.Done,
             embeddingByteArray = floatArrayToByteArray(screenshot.embedding),
             isUserEdited = screenshot.isUserEdited,
             userEditedAt = screenshot.userEditedAt
@@ -122,11 +122,15 @@ class ScreenshotRepositoryImpl @Inject constructor(
             ocrText = finalOcrText,  // Use preserved text
             category = screenshot.category,
             tagsJson = screenshot.tags.joinToString(","),
-            processingState = ProcessingState.Done,
+            // Preserve pipeline counters and failure code so callers that update non-pipeline
+            // fields (e.g. category, tags) do not accidentally reset retry state or clear a
+            // permanently-failed row back to NONE.
+            pipelineCode = existingEntity?.pipelineCode ?: PipelineFailureCode.NONE,
             embeddingByteArray = floatArrayToByteArray(screenshot.embedding),
             isUserEdited = if (shouldPreserveUserEditedFlag) true else screenshot.isUserEdited,
             userEditedAt = if (shouldPreserveUserEditedFlag) existingEntity?.userEditedAt else screenshot.userEditedAt,
-            ocrRetryCount = screenshot.ocrRetryCount
+            ocrRetryCount = screenshot.ocrRetryCount,
+            embeddingRetryCount = existingEntity?.embeddingRetryCount ?: 0
         )
         // Use REPLACE strategy to properly update existing records
         screenshotDao.insertOrReplace(entity)
@@ -138,6 +142,10 @@ class ScreenshotRepositoryImpl @Inject constructor(
             editedOcrText = editedText,
             timestamp = System.currentTimeMillis()
         )
+    }
+
+    override suspend fun resetForOcrRetry(id: String) {
+        screenshotDao.resetForOcrRetry(id)
     }
 
     override suspend fun deleteScreenshot(id: String) {
@@ -185,7 +193,6 @@ class ScreenshotRepositoryImpl @Inject constructor(
             val updatedEntity = entity.copy(
                 ocrText = extractedText,
                 embeddingByteArray = embedding?.let { floatArrayToByteArray(it) },
-                processingState = ProcessingState.Done,
                 dateIndexed = System.currentTimeMillis(),
                 ocrRetryCount = 0  // Reset retry count on success
             )
@@ -216,28 +223,13 @@ class ScreenshotRepositoryImpl @Inject constructor(
         )
     }
 
-    suspend fun scanExistingScreenshots(): Int {
+    override suspend fun scanExistingScreenshots(): Int {
         var addedCount = 0
         var skippedCount = 0
         var errorCount = 0
 
-        // Check permissions first
-        val hasPermission = when {
-            Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU -> {
-                context.checkSelfPermission(android.Manifest.permission.READ_MEDIA_IMAGES) ==
-                    android.content.pm.PackageManager.PERMISSION_GRANTED
-            }
-            Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q -> {
-                // Android 10-12: No runtime permission needed for MediaStore
-                true
-            }
-            else -> {
-                context.checkSelfPermission(android.Manifest.permission.READ_EXTERNAL_STORAGE) ==
-                    android.content.pm.PackageManager.PERMISSION_GRANTED
-            }
-        }
-
-        if (!hasPermission) {
+        // Delegate to PermissionRepository — single source of truth for all API levels
+        if (!permissionRepository.hasActualPermission()) {
             Log.e(TAG, "Missing required storage permission")
             return 0
         }
@@ -247,6 +239,11 @@ class ScreenshotRepositoryImpl @Inject constructor(
         // After: 1 DB query + 500 HashSet lookups (O(1) each)
         val existingPaths = screenshotDao.getAllScreenshotPaths().toSet()
         Log.d(TAG, "Loaded ${existingPaths.size} existing screenshot paths for comparison")
+
+        // Tracks paths inserted during this scan run to prevent duplicate inserts
+        // when the same file matches multiple OEM path patterns
+        // (e.g. "Screenshots" AND "Pictures/Screenshots" both match Pictures/Screenshots/).
+        val insertedThisRun = mutableSetOf<String>()
 
         val contentResolver: ContentResolver = context.contentResolver
         val uri = MediaStore.Images.Media.EXTERNAL_CONTENT_URI
@@ -276,43 +273,19 @@ class ScreenshotRepositoryImpl @Inject constructor(
             )
         }
 
-        // Query ALL images first to debug what's available
-        Log.i(TAG, "=== Starting Screenshot Scan Debug ===")
-        Log.i(TAG, "Querying MediaStore at: $uri")
+        Log.d(TAG, "Starting screenshot scan")
 
-        // First, query ALL images to see what's in MediaStore
-        val allImagesCount = try {
-            contentResolver.query(uri, projection, null, null, null)?.use { cursor ->
-                val count = cursor.count
-                Log.i(TAG, "Total images in MediaStore: $count")
-
-                // Log first 5 images for debugging
-                if (cursor.moveToFirst()) {
-                    val dataColumn = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.DATA)
-                    val relPathColumn = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.RELATIVE_PATH)
-                    var shown = 0
-                    do {
-                        if (shown < 5) {
-                            val path = cursor.getString(dataColumn) ?: "null"
-                            val relPath = cursor.getString(relPathColumn) ?: "null"
-                            Log.i(TAG, "Image $shown: PATH=$path, RELATIVE_PATH=$relPath")
-                            shown++
-                        }
-                    } while (cursor.moveToNext())
-                }
-                count
-            }
-        } catch (e: Exception) {
-            Log.e(TAG, "Error querying all images", e)
-            0
-        }
-
-        // Common screenshot directories across Android devices
+        // Common screenshot directories across Android OEMs.
+        // Ordered by prevalence — most common first.
         val screenshotPatterns = listOf(
-            "Screenshots",
-            "Pictures/Screenshots",
-            "DCIM/Screenshots",
-            "screenshot"
+            "Screenshots",           // Stock Android, Pixel
+            "Pictures/Screenshots",  // Most OEMs
+            "DCIM/Screenshots",      // Some Samsung, LG
+            "Pictures/screenshot",   // Xiaomi/MIUI
+            "Screenshots/",          // OnePlus OxygenOS
+            "Pictures/ScreenShots",  // Huawei/Honor
+            "Screenrecorder",        // Catch screen recordings with text
+            "screenshot"             // Generic fallback (case-insensitive via LIKE)
         )
 
         val sortOrder = "${MediaStore.Images.Media.DATE_ADDED} DESC"
@@ -321,8 +294,6 @@ class ScreenshotRepositoryImpl @Inject constructor(
             for (pattern in screenshotPatterns) {
                 val selection = "${MediaStore.Images.Media.RELATIVE_PATH} LIKE ?"
                 val selectionArgs = arrayOf("%$pattern%")
-
-                Log.d(TAG, "Scanning for screenshots with pattern: $selectionArgs[0]")
 
                 contentResolver.query(uri, projection, selection, selectionArgs, sortOrder)?.use { cursor ->
                     val dataColumn = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.DATA)
@@ -336,13 +307,6 @@ class ScreenshotRepositoryImpl @Inject constructor(
                         cursor.getColumnIndexOrThrow(MediaStore.Images.Media.OWNER_PACKAGE_NAME)
                     } else {
                         -1
-                    }
-
-                    val cursorCount = cursor.count
-                    Log.i(TAG, "Pattern '$pattern' found $cursorCount matches in MediaStore")
-
-                    if (cursorCount == 0) {
-                        Log.w(TAG, "No matches for pattern: $pattern")
                     }
 
                     while (cursor.moveToNext()) {
@@ -360,8 +324,6 @@ class ScreenshotRepositoryImpl @Inject constructor(
                                 ""
                             }
 
-                            Log.d(TAG, "Processing: $fileName | Path: $filePath | RelPath: $relativePath")
-
                             // Skip if file doesn't exist
                             val file = java.io.File(filePath)
                             if (!file.exists()) {
@@ -369,10 +331,10 @@ class ScreenshotRepositoryImpl @Inject constructor(
                                 continue
                             }
 
-                            // CRITICAL FIX: O(1) HashSet lookup instead of DB query
-                            // Before: val existing = screenshotDao.getScreenshotByPath(filePath) // DB query
-                            // After: existingPaths.contains(filePath) // O(1) HashSet lookup
-                            if (existingPaths.contains(filePath)) {
+                            // Skip if already in DB or already inserted by an earlier pattern
+                            // in this run (prevents cross-pattern duplicates, e.g. a file in
+                            // Pictures/Screenshots/ matching both "Screenshots" and "Pictures/Screenshots").
+                            if (existingPaths.contains(filePath) || insertedThisRun.contains(filePath)) {
                                 Log.d(TAG, "Skipping duplicate: $filePath")
                                 skippedCount++
                                 continue
@@ -406,13 +368,13 @@ class ScreenshotRepositoryImpl @Inject constructor(
                                 ocrText = null,
                                 category = "Uncategorized",
                                 tagsJson = "",
-                                processingState = ProcessingState.Pending,
                                 appName = appName
+                                // pipelineCode defaults to PipelineFailureCode.NONE (0)
                             )
 
                             screenshotDao.insert(entity)
+                            insertedThisRun.add(filePath)
                             addedCount++
-                            Log.i(TAG, "✓ Added screenshot: $fileName ($relativePath)")
                         } catch (e: Exception) {
                             errorCount++
                             Log.e(TAG, "Error processing cursor row", e)

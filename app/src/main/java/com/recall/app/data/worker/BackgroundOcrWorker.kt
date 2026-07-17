@@ -8,7 +8,7 @@ import androidx.work.WorkerParameters
 import com.recall.app.RecallApplication
 import com.recall.app.data.local.dao.ScreenshotDao
 import com.recall.app.data.local.entity.ScreenshotEntity
-import com.recall.app.domain.model.ProcessingState
+import com.recall.app.domain.model.PipelineFailureCode
 import com.recall.app.domain.usecase.EmbeddingGenerator
 import com.recall.app.domain.usecase.OcrProcessor
 import dagger.assisted.Assisted
@@ -59,7 +59,7 @@ class BackgroundOcrWorker @AssistedInject constructor(
 
                 val batches = ocrPending.chunked(BATCH_SIZE)
                 for ((batchIndex, batch) in batches.withIndex()) {
-                    if (isStopped()) {
+                    if (isStopped) {
                         Log.w(TAG, "Worker stopped during Pass 1 batch ${batchIndex + 1}")
                         return@withContext Result.retry()
                     }
@@ -107,7 +107,7 @@ class BackgroundOcrWorker @AssistedInject constructor(
                     Log.i(TAG, "Pass 2: ${embeddingPending.size} screenshots need embedding only")
 
                     for (screenshot in embeddingPending) {
-                        if (isStopped()) {
+                        if (isStopped) {
                             Log.w(TAG, "Worker stopped during Pass 2")
                             return@withContext Result.retry()
                         }
@@ -148,7 +148,7 @@ class BackgroundOcrWorker @AssistedInject constructor(
                 if (moreOcrPending || moreEmbeddingPending) {
                     Log.i(TAG, "More items pending — re-enqueueing next batch")
                     val next = androidx.work.OneTimeWorkRequestBuilder<BackgroundOcrWorker>()
-                        .addTag(RecallApplication.INDEXING_TAG)
+                        .addTag(IndexingPipelineWorker.INDEXING_TAG)
                         .build()
                     androidx.work.WorkManager.getInstance(appContext)
                         .enqueueUniqueWork(SELF_CHAIN_WORK_NAME, androidx.work.ExistingWorkPolicy.KEEP, next)
@@ -180,6 +180,11 @@ class BackgroundOcrWorker @AssistedInject constructor(
         }
 
         if (screenshot.ocrRetryCount >= MAX_OCR_RETRIES) {
+            // Already at the limit — ensure pipelineCode is marked so getPendingCount
+            // and future pipeline runs don't count this row as actionable work.
+            if (screenshot.pipelineCode == PipelineFailureCode.NONE) {
+                screenshotDao.markFailed(screenshot.id, PipelineFailureCode.OCR_FAILED)
+            }
             Log.w(TAG, "Skipping OCR - max retries exceeded: ${screenshot.id}")
             return Pair(screenshot, null)
         }
@@ -188,6 +193,12 @@ class BackgroundOcrWorker @AssistedInject constructor(
         if (!file.exists()) {
             Log.w(TAG, "File not found: ${screenshot.filePath}")
             screenshotDao.incrementOcrRetryCount(screenshot.id)
+            val newCount = screenshot.ocrRetryCount + 1
+            if (newCount >= MAX_OCR_RETRIES) {
+                // Surgical write — does not touch any other column; write-once guard in SQL
+                screenshotDao.markFailed(screenshot.id, PipelineFailureCode.OCR_FAILED)
+                Log.w(TAG, "OCR permanently failed (file not found) for: ${screenshot.filePath}")
+            }
             return Pair(screenshot, null)
         }
 
@@ -198,6 +209,11 @@ class BackgroundOcrWorker @AssistedInject constructor(
             if (extractedText.isNullOrBlank()) {
                 Log.w(TAG, "OCR returned empty text for: ${screenshot.filePath}")
                 screenshotDao.incrementOcrRetryCount(screenshot.id)
+                val newCount = screenshot.ocrRetryCount + 1
+                if (newCount >= MAX_OCR_RETRIES) {
+                    screenshotDao.markFailed(screenshot.id, PipelineFailureCode.OCR_FAILED)
+                    Log.w(TAG, "OCR permanently failed (blank result) for: ${screenshot.filePath}")
+                }
                 Pair(screenshot, null)
             } else {
                 Pair(screenshot, extractedText)
@@ -205,6 +221,11 @@ class BackgroundOcrWorker @AssistedInject constructor(
         } catch (e: Exception) {
             Log.e(TAG, "OCR failed for ${screenshot.filePath}", e)
             screenshotDao.incrementOcrRetryCount(screenshot.id)
+            val newCount = screenshot.ocrRetryCount + 1
+            if (newCount >= MAX_OCR_RETRIES) {
+                screenshotDao.markFailed(screenshot.id, PipelineFailureCode.OCR_FAILED)
+                Log.w(TAG, "OCR permanently failed (exception) for: ${screenshot.filePath}")
+            }
             Pair(screenshot, null)
         }
     }
@@ -214,10 +235,9 @@ class BackgroundOcrWorker @AssistedInject constructor(
      *
      * Takes the [extractedText] from [runOcrForScreenshot] and:
      * 1. Generates an ONNX embedding vector
-     * 2. If embedding succeeds → saves ocrText + embedding + [ProcessingState.Done]
-     * 3. If embedding returns null (model not loaded, OOM, etc.) → saves ocrText only,
-     *    leaves [ProcessingState.Pending] so the row appears in [getEmbeddingPendingScreenshots]
-     *    and is picked up by Pass 2 on the next worker run.
+     * 2. If embedding succeeds → saves ocrText + embedding (state derived from both being non-null)
+     * 3. If embedding returns null (model not loaded, OOM, etc.) → saves ocrText only so the row
+     *    appears in [getEmbeddingPendingScreenshots] and is picked up by Pass 2 on the next run.
      *
      * If [extractedText] is null, Phase 1 already handled the failure (retry count incremented)
      * — this function is a no-op in that case.
@@ -229,23 +249,27 @@ class BackgroundOcrWorker @AssistedInject constructor(
             val embedding = embeddingGenerator.generate(extractedText)
 
             if (embedding != null) {
-                // Full success — OCR text + embedding ready → mark Done
-                screenshotDao.update(screenshot.copy(
-                    ocrText = extractedText,
-                    embeddingByteArray = floatToByteArray(embedding),
-                    processingState = ProcessingState.Done,
-                    ocrRetryCount = 0
-                ))
-                screenshotDao.rebuildFtsIndex()
-                Log.i(TAG, "Saved OCR + embedding for: ${screenshot.fileName}")
+                // Full success — write embedding only if the user hasn't edited OCR text
+                // since this entity was fetched. If they did (returns 0), skip the stale
+                // write; the pipeline regenerates from correct text on the next run.
+                val written = screenshotDao.saveEmbeddingIfNotUserEdited(
+                    id = screenshot.id,
+                    embedding = floatToByteArray(embedding)
+                )
+                if (written > 0) {
+                    screenshotDao.rebuildFtsIndex()
+                    Log.i(TAG, "Saved OCR + embedding for: ${screenshot.fileName}")
+                } else {
+                    Log.d(TAG, "Skipped embedding write — user edited OCR text for: ${screenshot.fileName}")
+                }
             } else {
-                // Embedding failed (model unavailable / OOM) — save OCR text but stay Pending
-                // so Pass 2 can retry the embedding on the next worker run.
+                // Embedding failed (model unavailable / OOM) — save OCR text only;
+                // state derived from ocrText being non-null + embeddingByteArray being null
+                // so Pass 2 can pick it up via getEmbeddingPendingScreenshots() next run.
                 Log.w(TAG, "Embedding returned null for ${screenshot.fileName} — saving OCR only, will retry embedding")
                 screenshotDao.update(screenshot.copy(
                     ocrText = extractedText,
                     embeddingByteArray = null,
-                    processingState = ProcessingState.Pending,
                     ocrRetryCount = 0
                 ))
                 screenshotDao.rebuildFtsIndex()
@@ -261,8 +285,8 @@ class BackgroundOcrWorker @AssistedInject constructor(
      * Pass 2 — Retry embedding for a row that already has [ScreenshotEntity.ocrText]
      * but is missing [ScreenshotEntity.embeddingByteArray].
      *
-     * Does not re-run OCR. On success saves embedding + [ProcessingState.Done] and
-     * resets [ScreenshotEntity.embeddingRetryCount] to 0.
+     * Does not re-run OCR. On success saves embedding (state derived from both ocrText and
+     * embeddingByteArray being non-null) and resets [ScreenshotEntity.embeddingRetryCount] to 0.
      * On failure increments [ScreenshotEntity.embeddingRetryCount] — intentionally
      * separate from [ScreenshotEntity.ocrRetryCount] so that transient embedding errors
      * (model not loaded, OOM) never permanently orphan rows with valid OCR text.
@@ -276,7 +300,6 @@ class BackgroundOcrWorker @AssistedInject constructor(
             if (embedding != null) {
                 screenshotDao.update(screenshot.copy(
                     embeddingByteArray = floatToByteArray(embedding),
-                    processingState = ProcessingState.Done,
                     embeddingRetryCount = 0
                 ))
                 screenshotDao.rebuildFtsIndex()

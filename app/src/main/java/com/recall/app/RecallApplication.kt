@@ -8,33 +8,26 @@ import android.provider.MediaStore
 import android.util.Log
 import androidx.hilt.work.HiltWorkerFactory
 import androidx.work.Configuration
-import androidx.work.ExistingPeriodicWorkPolicy
 import androidx.work.ExistingWorkPolicy
 import androidx.work.OneTimeWorkRequestBuilder
-import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import com.recall.app.data.nlp.VectorIndexBootstrapper
+import com.recall.app.data.repository.PermissionRepository
 import com.recall.app.data.service.ScreenshotContentObserver
-import com.recall.app.data.worker.BackgroundOcrWorker
 import com.recall.app.data.worker.IndexingPipelineWorker
-import com.recall.app.data.worker.ScanExistingWorker
 import com.recall.app.domain.usecase.EmbeddingGenerator
+import com.recall.app.util.CrashHandler
 import dagger.hilt.android.HiltAndroidApp
 import javax.inject.Inject
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.MainScope
 import kotlinx.coroutines.cancel
-import java.util.concurrent.TimeUnit
 
 @HiltAndroidApp
 class RecallApplication : Application(), Configuration.Provider {
 
     companion object {
         private const val TAG = "RecallApplication"
-
-        /** Shared WorkManager tag applied to every indexing worker.
-         *  Used by [HomeViewModel] to observe and cancel all active indexing in one call. */
-        const val INDEXING_TAG = "recall_indexing"
 
         /** Notification channel ID for foreground indexing service notifications. */
         const val INDEXING_CHANNEL_ID = "indexing_channel"
@@ -49,6 +42,9 @@ class RecallApplication : Application(), Configuration.Provider {
     @Inject
     lateinit var embeddingGenerator: EmbeddingGenerator
 
+    @Inject
+    lateinit var permissionRepository: PermissionRepository
+
     private val applicationScope = MainScope()
 
     override val workManagerConfiguration: Configuration
@@ -60,6 +56,9 @@ class RecallApplication : Application(), Configuration.Provider {
 
     override fun onCreate() {
         super.onCreate()
+
+        // Register first — catches crashes that occur during the rest of startup
+        CrashHandler.register(this)
 
         createIndexingNotificationChannel()
 
@@ -75,9 +74,6 @@ class RecallApplication : Application(), Configuration.Provider {
             true,
             contentObserver
         )
-
-        // Schedule periodic background OCR processing
-        scheduleBackgroundOcrProcessing()
 
         // On every cold launch, scan for screenshots taken while the app was dead,
         // then run OCR on anything newly discovered or still pending.
@@ -118,35 +114,6 @@ class RecallApplication : Application(), Configuration.Provider {
     }
 
     /**
-     * Schedules periodic background OCR processing for screenshots without extracted text.
-     * Runs every 6 hours, processing newest images first.
-     */
-    private fun scheduleBackgroundOcrProcessing() {
-        val workManager = WorkManager.getInstance(this)
-
-        val ocrWorkRequest = PeriodicWorkRequestBuilder<BackgroundOcrWorker>(
-            repeatInterval = 6L,
-            repeatIntervalTimeUnit = TimeUnit.HOURS
-        )
-            .setConstraints(
-                androidx.work.Constraints.Builder()
-                    .setRequiresBatteryNotLow(!BuildConfig.DEBUG) // Skip in debug
-                    .setRequiresCharging(false)
-                    .build()
-            )
-            .addTag("background_ocr")
-            .addTag(INDEXING_TAG)
-            .build()
-
-        // KEEP — preserves the existing schedule so cold launches don't reset the timer.
-        workManager.enqueueUniquePeriodicWork(
-            "background_ocr_work",
-            ExistingPeriodicWorkPolicy.KEEP,
-            ocrWorkRequest
-        )
-    }
-
-    /**
      * Creates the notification channel used by [IndexingPipelineWorker] for foreground
      * service notifications. Safe to call on every launch — on API 26+ the system is
      * idempotent for channels with the same ID.
@@ -176,8 +143,16 @@ class RecallApplication : Application(), Configuration.Provider {
      * (e.g. user rapidly restarts the app) it is left undisturbed.
      */
     private fun scheduleLaunchTimeScan() {
+        // Only enqueue if the app already has the storage permission.
+        // On first launch the user hasn't seen the permission screen yet — skip here;
+        // MainActivity.startInitialDeepScan() will enqueue after the grant callback.
+        if (!permissionRepository.hasActualPermission()) {
+            Log.i(TAG, "Skipping launch-time scan — storage permission not yet granted")
+            return
+        }
+
         val pipelineRequest = OneTimeWorkRequestBuilder<IndexingPipelineWorker>()
-            .addTag(INDEXING_TAG)
+            .addTag(IndexingPipelineWorker.INDEXING_TAG)
             .build()
         WorkManager.getInstance(this).enqueueUniqueWork(
             IndexingPipelineWorker.PIPELINE_WORK_NAME,

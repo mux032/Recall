@@ -1,12 +1,12 @@
 package com.recall.app.domain.model
 
 /**
- * Domain model for Screenshot with user edit tracking.
+ * Domain model for a screenshot.
  *
- * @property isUserEdited True if the user has manually edited the OCR text
- * @property userEditedAt Timestamp when the user last edited the OCR text (null if never edited)
- * @property ocrRetryCount Number of times OCR processing has been retried for this screenshot (prevents infinite loops)
- * @property processingState The current processing state of the screenshot in the OCR pipeline
+ * @property pipelineCode Terminal failure code — see [PipelineFailureCode]. 0 = no failure.
+ * @property isUserEdited True if the user has manually edited the OCR text.
+ * @property userEditedAt Timestamp when the user last edited the OCR text (null if never edited).
+ * @property ocrRetryCount Number of times OCR processing has been retried (prevents infinite loops).
  */
 data class Screenshot(
     val id: String,
@@ -26,9 +26,5 @@ data class Screenshot(
     val isUserEdited: Boolean = false,
     val userEditedAt: Long? = null,
     val ocrRetryCount: Int = 0,
-    val processingState: String = "PENDING"
-) {
-    // Helper property to convert between String and ProcessingState
-    val processingStateEnum: ProcessingState
-        get() = ProcessingState.fromValue(processingState)
-}
+    val pipelineCode: Int = PipelineFailureCode.NONE
+)

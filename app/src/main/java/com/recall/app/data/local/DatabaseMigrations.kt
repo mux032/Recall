@@ -1,13 +1,4 @@
 package com.recall.app.data.local
 
-import androidx.room.migration.Migration
-import androidx.sqlite.db.SupportSQLiteDatabase
-
-// DEVELOPMENT PHASE - No manual migrations needed
-// Using fallbackToDestructiveMigration() instead
-
-// val MIGRATION_1_2 = object : Migration(1, 2) {
-//     override fun migrate(database: SupportSQLiteDatabase) {
-//         // Migration code removed for development phase
-//     }
-// }
+// No migrations — database is at version 1 (clean baseline).
+// Add Migration objects here when the schema changes in future versions.

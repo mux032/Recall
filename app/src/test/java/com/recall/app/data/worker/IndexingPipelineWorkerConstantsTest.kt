@@ -61,12 +61,28 @@ class IndexingPipelineWorkerConstantsTest {
     }
 
     @Test
-    fun `indexingProgress initial state is zero`() {
-        // StateFlow always has a value — initial should be zeros
-        val progress = IndexingPipelineWorker.indexingProgress.value
-        // Progress may have been updated by other tests but initial value should have total >= 0
-        assertTrue(progress.total >= 0)
-        assertTrue(progress.completed >= 0)
+    fun `IndexingProgressRepository initial state is zero`() {
+        val repo = IndexingProgressRepository()
+        val progress = repo.progress.value
+        assertEquals(0, progress.completed)
+        assertEquals(0, progress.total)
+    }
+
+    @Test
+    fun `IndexingProgressRepository update reflects new values`() {
+        val repo = IndexingProgressRepository()
+        repo.update(5, 20)
+        assertEquals(5, repo.progress.value.completed)
+        assertEquals(20, repo.progress.value.total)
+    }
+
+    @Test
+    fun `IndexingProgressRepository reset clears to zero`() {
+        val repo = IndexingProgressRepository()
+        repo.update(10, 50)
+        repo.reset()
+        assertEquals(0, repo.progress.value.completed)
+        assertEquals(0, repo.progress.value.total)
     }
 
     @Test

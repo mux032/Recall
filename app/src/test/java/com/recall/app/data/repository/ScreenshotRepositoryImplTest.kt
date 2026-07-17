@@ -6,7 +6,7 @@ import androidx.test.core.app.ApplicationProvider
 import com.recall.app.data.local.dao.ScreenshotDao
 import com.recall.app.data.local.entity.ScreenshotEntity
 import com.recall.app.data.local.entity.toDomainModel
-import com.recall.app.domain.model.ProcessingState
+import com.recall.app.domain.model.PipelineFailureCode
 import com.recall.app.domain.usecase.EmbeddingGenerator
 import com.recall.app.domain.usecase.OcrProcessor
 import kotlinx.coroutines.test.runTest
@@ -14,6 +14,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
+import org.mockito.kotlin.doReturn
 import org.mockito.kotlin.mock
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
@@ -25,16 +26,20 @@ class ScreenshotRepositoryImplTest {
     private lateinit var screenshotDao: ScreenshotDao
     private lateinit var ocrProcessor: OcrProcessor
     private lateinit var embeddingGenerator: EmbeddingGenerator
+    private lateinit var permissionRepository: PermissionRepository
     private lateinit var repository: ScreenshotRepositoryImpl
     private lateinit var context: Context
 
     @Before
     fun setup() {
         context = ApplicationProvider.getApplicationContext()
-        screenshotDao = mock()
         ocrProcessor = mock()
         embeddingGenerator = mock()
-        repository = ScreenshotRepositoryImpl(screenshotDao, ocrProcessor, embeddingGenerator, context)
+        permissionRepository = mock { on { hasActualPermission() } doReturn true }
+        screenshotDao = mock { onBlocking { getAllScreenshotPaths() } doReturn emptyList() }
+        repository = ScreenshotRepositoryImpl(
+            screenshotDao, ocrProcessor, embeddingGenerator, permissionRepository, context
+        )
     }
 
     @Test
@@ -65,9 +70,7 @@ class ScreenshotRepositoryImplTest {
     }
 
     @Test
-    fun `ScreenshotEntity defaults appName to empty string`() {
-        // Ensures the column has a safe default so existing DB rows without the
-        // column (pre-migration) are deserialized without crashes.
+    fun `ScreenshotEntity defaults pipelineCode to NONE`() {
         val entity = ScreenshotEntity(
             id = "default_test",
             filePath = "/sdcard/Screenshots/test.png",
@@ -78,19 +81,16 @@ class ScreenshotRepositoryImplTest {
             height = 1920,
             ocrText = null,
             category = "Uncategorized",
-            tagsJson = "",
-            processingState = ProcessingState.Pending
-            // appName intentionally omitted — should default to ""
+            tagsJson = ""
+            // pipelineCode and appName intentionally omitted — should default to NONE / ""
         )
+        assertEquals(PipelineFailureCode.NONE, entity.pipelineCode)
         assertEquals("", entity.appName)
-        assertEquals("", entity.toDomainModel().appName)
+        assertEquals(PipelineFailureCode.NONE, entity.toDomainModel().pipelineCode)
     }
 
     @Test
     fun `appName is empty string when OWNER_PACKAGE_NAME unavailable (API 28 fallback)`() {
-        // On API < 29 OWNER_PACKAGE_NAME is not in the projection, so the column index
-        // is -1 and appName falls back to "". Verify the entity and domain model both
-        // reflect that contract without needing to spin up a different SDK level.
         val entity = buildEntity(appName = "")
         assertEquals("", entity.appName)
         assertEquals("", entity.toDomainModel().appName)
@@ -108,6 +108,12 @@ class ScreenshotRepositoryImplTest {
         assertEquals("com.instagram.android", domain.appName)
     }
 
+    @Test
+    fun `toDomainModel maps pipelineCode correctly`() {
+        val entity = buildEntity(appName = "").copy(pipelineCode = PipelineFailureCode.OCR_FAILED)
+        assertEquals(PipelineFailureCode.OCR_FAILED, entity.toDomainModel().pipelineCode)
+    }
+
     // ---------------------------------------------------------------------------
     // Helpers
     // ---------------------------------------------------------------------------
@@ -123,7 +129,7 @@ class ScreenshotRepositoryImplTest {
         ocrText = "Sample text",
         category = "Uncategorized",
         tagsJson = "",
-        processingState = ProcessingState.Done,
+        embeddingByteArray = ByteArray(512), // non-null = fully indexed
         appName = appName
     )
 }
