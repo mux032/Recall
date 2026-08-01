@@ -1,7 +1,6 @@
 package com.recall.app.presentation.ui.home
 
 import android.util.Log
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.focusable
@@ -19,15 +18,11 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items as lazyListItems
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Apps
 import androidx.compose.material.icons.filled.AutoAwesome
-import androidx.compose.material.icons.filled.GridView
-import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -58,7 +53,6 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.foundation.isSystemInDarkTheme
-import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.TextRange
@@ -71,7 +65,6 @@ import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import androidx.navigation.NavBackStackEntry
 import com.recall.app.domain.model.Screenshot
-import com.recall.app.domain.model.ScreenshotFilter
 import com.recall.app.presentation.ui.components.RecallSearchBar
 import com.recall.app.presentation.ui.theme.Inter
 import kotlinx.coroutines.launch
@@ -107,7 +100,6 @@ fun HomeScreen(
         }
     }
     val searchHistory by viewModel.searchHistory.collectAsState()
-    val selectedFilter by viewModel.selectedFilter.collectAsState()
     val isLoadingMore by viewModel.isLoadingMore.collectAsState()
     val allPagesLoaded by viewModel.allPagesLoaded.collectAsState()
     var searchQuery by remember { mutableStateOf(TextFieldValue("")) }
@@ -138,10 +130,6 @@ fun HomeScreen(
                     Spacer(modifier = Modifier.height(16.dp))
                     CuratorTopAppBar(
                         onSettingsClick = onSettingsClick
-                    )
-                    CuratorSmartFilters(
-                        selectedFilter = selectedFilter,
-                        onFilterSelected = { viewModel.setFilter(it) }
                     )
                 }
             },
@@ -334,94 +322,6 @@ fun CuratorTopAppBar(
                         modifier = Modifier.size(24.dp)
                     )
                 }
-            )
-        }
-    }
-}
-
-@Composable
-fun CuratorSmartFilters(
-    selectedFilter: ScreenshotFilter,
-    onFilterSelected: (ScreenshotFilter) -> Unit
-) {
-    // Each entry maps a display label + icon to its ScreenshotFilter value.
-    val filters = listOf(
-        FilterChipData("All",       Icons.Default.GridView,    ScreenshotFilter.ALL),
-        FilterChipData("Recent",    Icons.Default.History,     ScreenshotFilter.RECENT),
-        FilterChipData("By App",    Icons.Default.Apps,        ScreenshotFilter.BY_APP),
-        FilterChipData("Summarized",Icons.Default.AutoAwesome, ScreenshotFilter.SUMMARIZED)
-    )
-
-    LazyRow(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 8.dp),
-        horizontalArrangement = Arrangement.spacedBy(8.dp)
-    ) {
-        lazyListItems(filters) { chip ->
-            SmartFilterChip(
-                label = chip.label,
-                icon = chip.icon,
-                isSelected = selectedFilter == chip.filter,
-                onClick = { onFilterSelected(chip.filter) }
-            )
-        }
-    }
-}
-
-data class FilterChipData(
-    val label: String,
-    val icon: ImageVector,
-    val filter: ScreenshotFilter
-)
-
-@Composable
-fun SmartFilterChip(
-    label: String,
-    icon: ImageVector,
-    isSelected: Boolean,
-    onClick: () -> Unit
-) {
-    val backgroundColor = if (isSelected) {
-        MaterialTheme.colorScheme.primary
-    } else {
-        MaterialTheme.colorScheme.surfaceContainerHigh
-    }
-
-    val contentColor = if (isSelected) {
-        MaterialTheme.colorScheme.onPrimary
-    } else {
-        MaterialTheme.colorScheme.onSurface
-    }
-
-    Surface(
-        onClick = onClick,
-        shape = RoundedCornerShape(50),
-        color = backgroundColor,
-        contentColor = contentColor,
-        border = if (!isSelected) {
-            BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.3f))
-        } else {
-            null
-        },
-        shadowElevation = if (isSelected) 4.dp else 0.dp
-    ) {
-        Row(
-            modifier = Modifier
-                .padding(horizontal = 16.dp, vertical = 10.dp),
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Icon(
-                imageVector = icon,
-                contentDescription = null,
-                modifier = Modifier.size(18.dp),
-                tint = contentColor
-            )
-            Text(
-                text = label,
-                style = MaterialTheme.typography.labelLarge,
-                fontWeight = FontWeight.SemiBold
             )
         }
     }

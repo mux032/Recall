@@ -3,7 +3,6 @@ package com.recall.app.presentation.ui.home
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.recall.app.domain.model.Screenshot
-import com.recall.app.domain.model.ScreenshotFilter
 import com.recall.app.domain.model.SearchHistoryItem
 import android.content.Context
 import com.recall.app.data.local.ModelDownloadState
@@ -43,9 +42,6 @@ class HomeViewModel @Inject constructor(
 ) : ViewModel() {
 
     companion object {
-        /** 7 days in milliseconds — the window for the RECENT filter. */
-        private const val RECENT_WINDOW_MS = 7 * 24 * 60 * 60 * 1000L
-
         /**
          * Poll interval for [isVectorIndexReady].
          *
@@ -79,41 +75,8 @@ class HomeViewModel @Inject constructor(
     private val _allPagesLoaded = MutableStateFlow(false)
     val allPagesLoaded: StateFlow<Boolean> = _allPagesLoaded
 
-    // -----------------------------------------------------------------------
-    // Filter state
-    // -----------------------------------------------------------------------
-
-    /** The currently active filter. Defaults to ALL (no filter). */
-    private val _selectedFilter = MutableStateFlow(ScreenshotFilter.ALL)
-    val selectedFilter: StateFlow<ScreenshotFilter> = _selectedFilter
-
-    /**
-     * The filtered list of screenshots based on [selectedFilter].
-     * Derived from [_loadedScreenshots] combined with [_selectedFilter].
-     *
-     * - [ScreenshotFilter.ALL]        — all loaded screenshots, no filtering.
-     * - [ScreenshotFilter.RECENT]     — screenshots from the last 7 days.
-     * - [ScreenshotFilter.BY_APP]     — non-blank appName (Phase 8 full support pending).
-     * - [ScreenshotFilter.SUMMARIZED] — non-blank description (Phase 7 full support pending).
-     */
-    val screenshots: StateFlow<List<Screenshot>> = combine(
-        _loadedScreenshots,
-        _selectedFilter
-    ) { screenshots, filter ->
-        when (filter) {
-            ScreenshotFilter.ALL -> screenshots
-            ScreenshotFilter.RECENT -> {
-                val since = System.currentTimeMillis() - RECENT_WINDOW_MS
-                screenshots.filter { it.dateCreated >= since }
-            }
-            ScreenshotFilter.BY_APP -> screenshots.filter { it.appName.isNotBlank() }
-            ScreenshotFilter.SUMMARIZED -> screenshots.filter { it.description.isNotBlank() }
-        }
-    }.stateIn(
-        scope = viewModelScope,
-        started = SharingStarted.WhileSubscribed(5000),
-        initialValue = emptyList()
-    )
+    /** All loaded screenshots, exposed directly without any filter applied. */
+    val screenshots: StateFlow<List<Screenshot>> = _loadedScreenshots
 
     /**
      * Screenshots grouped into timeline sections (Today, Yesterday, This Week, etc.),
@@ -235,19 +198,6 @@ class HomeViewModel @Inject constructor(
         _loadedScreenshots.value = emptyList()
         _allPagesLoaded.value = false
         loadNextPage()
-    }
-
-    /**
-     * Sets the active filter.
-     * - Tapping [ScreenshotFilter.ALL] always resets to ALL (no toggle needed).
-     * - Tapping any other filter while it is already active deselects it (returns to ALL).
-     */
-    fun setFilter(filter: ScreenshotFilter) {
-        _selectedFilter.value = when {
-            filter == ScreenshotFilter.ALL -> ScreenshotFilter.ALL
-            _selectedFilter.value == filter -> ScreenshotFilter.ALL
-            else -> filter
-        }
     }
 
     fun addSearchHistory(query: String) {
