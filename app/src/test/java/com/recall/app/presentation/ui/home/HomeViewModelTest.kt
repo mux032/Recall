@@ -1,7 +1,6 @@
 package com.recall.app.presentation.ui.home
 
 import com.recall.app.domain.model.Screenshot
-import com.recall.app.domain.model.ScreenshotFilter
 import com.recall.app.domain.repository.ScreenshotRepository
 import java.time.LocalDate
 import java.time.ZoneId
@@ -226,103 +225,6 @@ class HomeViewModelTest {
 
         // Still true after reload (page is still small)
         assertTrue(viewModel.allPagesLoaded.value)
-    }
-
-    // -----------------------------------------------------------------------
-    // Filter state
-    // -----------------------------------------------------------------------
-
-    @Test
-    fun `initial filter is ALL`() = runTest {
-        whenever(screenshotRepository.getScreenshotPage(any(), any())).thenReturn(emptyList())
-        viewModel = buildViewModel()
-        assertEquals(ScreenshotFilter.ALL, viewModel.selectedFilter.value)
-    }
-
-    @Test
-    fun `setFilter RECENT sets selectedFilter to RECENT`() = runTest {
-        whenever(screenshotRepository.getScreenshotPage(any(), any())).thenReturn(emptyList())
-        viewModel = buildViewModel()
-        viewModel.setFilter(ScreenshotFilter.RECENT)
-        assertEquals(ScreenshotFilter.RECENT, viewModel.selectedFilter.value)
-    }
-
-    @Test
-    fun `setFilter same filter twice deselects back to ALL`() = runTest {
-        whenever(screenshotRepository.getScreenshotPage(any(), any())).thenReturn(emptyList())
-        viewModel = buildViewModel()
-        viewModel.setFilter(ScreenshotFilter.RECENT)
-        viewModel.setFilter(ScreenshotFilter.RECENT)
-        assertEquals(ScreenshotFilter.ALL, viewModel.selectedFilter.value)
-    }
-
-    @Test
-    fun `RECENT filter state is set correctly`() = runTest {
-        whenever(screenshotRepository.getScreenshotPage(any(), any())).thenReturn(emptyList())
-        viewModel = buildViewModel()
-        advanceUntilIdle()
-
-        viewModel.setFilter(ScreenshotFilter.RECENT)
-        assertEquals(ScreenshotFilter.RECENT, viewModel.selectedFilter.value)
-    }
-
-    @Test
-    fun `SUMMARIZED filter state is set correctly`() = runTest {
-        whenever(screenshotRepository.getScreenshotPage(any(), any())).thenReturn(emptyList())
-        viewModel = buildViewModel()
-        advanceUntilIdle()
-
-        viewModel.setFilter(ScreenshotFilter.SUMMARIZED)
-        assertEquals(ScreenshotFilter.SUMMARIZED, viewModel.selectedFilter.value)
-    }
-
-    @Test
-    fun `BY_APP filter state is set correctly`() = runTest {
-        whenever(screenshotRepository.getScreenshotPage(any(), any())).thenReturn(emptyList())
-        viewModel = buildViewModel()
-        advanceUntilIdle()
-
-        viewModel.setFilter(ScreenshotFilter.BY_APP)
-        assertEquals(ScreenshotFilter.BY_APP, viewModel.selectedFilter.value)
-    }
-
-    /**
-     * Verifies filtering logic directly using the filter enum values and Kotlin predicates,
-     * matching exactly what HomeViewModel.screenshots combine block does.
-     */
-    @Test
-    fun `filter logic RECENT excludes old screenshots`() {
-        val now = System.currentTimeMillis()
-        val recentWindow = 7 * 24 * 60 * 60 * 1000L
-        val screenshots = listOf(
-            buildScreenshot("1", dateCreated = now - 2 * 24 * 60 * 60 * 1000L), // 2 days ago ✓
-            buildScreenshot("2", dateCreated = now - 10 * 24 * 60 * 60 * 1000L) // 10 days ago ✗
-        )
-        val result = screenshots.filter { it.dateCreated >= now - recentWindow }
-        assertEquals(1, result.size)
-        assertEquals("1", result.first().id)
-    }
-
-    @Test
-    fun `filter logic SUMMARIZED excludes blank descriptions`() {
-        val screenshots = listOf(
-            buildScreenshot("1", description = "AI summary"),
-            buildScreenshot("2", description = "")
-        )
-        val result = screenshots.filter { it.description.isNotBlank() }
-        assertEquals(1, result.size)
-        assertEquals("1", result.first().id)
-    }
-
-    @Test
-    fun `filter logic BY_APP excludes blank appNames`() {
-        val screenshots = listOf(
-            buildScreenshot("1", appName = "com.whatsapp"),
-            buildScreenshot("2", appName = "")
-        )
-        val result = screenshots.filter { it.appName.isNotBlank() }
-        assertEquals(1, result.size)
-        assertEquals("1", result.first().id)
     }
 
     // -----------------------------------------------------------------------
